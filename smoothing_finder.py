@@ -24,6 +24,13 @@ def bin_and_smooth_spike_times(spike_times, bin_size=50, sigma=None):
 def plot_heatmap(smoothed_spikes_matrix, subunit_names, time_bins, zoom_start=None, zoom_end=None):
     plt.figure(figsize=(12, 8))
     
+    print(f"Dimensions de smoothed_spikes_matrix : {smoothed_spikes_matrix.shape}")
+    print(f"Dimensions de time_bins : {time_bins.shape}")
+    print(f"Valeurs de time_bins (quelques exemples) : {time_bins[:10]}")
+    
+    # Vérifier que time_bins couvre bien la durée totale
+    print(f"Durée totale (s) estimée : {time_bins[-1]} secondes")  # Vérifier si cela correspond à ~1400s
+    
     # Determine the range to display based on zoom
     if zoom_start is not None and zoom_end is not None:
         zoom_indices = (time_bins >= zoom_start) & (time_bins <= zoom_end)
