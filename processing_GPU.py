@@ -22,15 +22,10 @@ def load_data(pkl_file):
 
 # Function to extract spike times based on unit selection
 def extract_spike_times(data_dict, unit_selection):
-    spike_times_list = []
+    spike_times_dict = {}
     for channel_key in data_dict:
         channel_data = data_dict[channel_key]
-        units_found = False  # Flag to check if any units are found in the channel
-
-        # Extract the channel number from the channel key
-        channel_number = channel_key.replace('Channel', '').lstrip('0')  # Remove 'Channel' and leading zeros
-
-        # Depending on unit selection, select unit keys
+        channel_number = channel_key.replace('Channel', '').lstrip('0')
         unit_keys = []
         if unit_selection == 'unit1' or unit_selection == 'both':
             unit_key1 = f'ID_ch{channel_number}#1'
@@ -38,22 +33,14 @@ def extract_spike_times(data_dict, unit_selection):
         if unit_selection == 'unit2' or unit_selection == 'both':
             unit_key2 = f'ID_ch{channel_number}#2'
             unit_keys.append(unit_key2)
-
         for unit_key in unit_keys:
             if unit_key in channel_data:
                 spike_times = channel_data[unit_key]['spike_times']
-                spike_times_list.append(spike_times)
-                units_found = True
+                # Stocker les spikes times pour chaque subunit individuellement
+                spike_times_dict[unit_key] = spike_times
             else:
-                # Optional: print that the unit was not found
-                # print(f"Unit {unit_key} not found in {channel_key}.")
-                pass
-
-        # Optional: Log if no units are found in a channel
-        if not units_found:
-            print(f"No selected units found in {channel_key}.")
-
-    return spike_times_list
+                print(f"Unit {unit_key} not found in {channel_key}.")
+    return spike_times_dict
 
 # Function to bin the spike times
 def bin_spike_times(spike_times_list, bin_size, duration):

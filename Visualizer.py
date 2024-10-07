@@ -3,13 +3,21 @@ import pickle
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 import matplotlib.pyplot as plt
-
+from scipy.signal import butter, filtfilt
 
 # Charger les données du fichier pickle
 def load_pickle(file_path):
     with open(file_path, 'rb') as f:
         data = pickle.load(f)
     return data
+
+# Apply low-pass filter to the data
+def apply_lowpass_filter(data, cutoff, fs, order=5):
+    nyquist = 0.5 * fs  # Nyquist frequency is half the sampling rate
+    normal_cutoff = cutoff / nyquist
+    b, a = butter(order, normal_cutoff, btype='low', analog=False)
+    y = filtfilt(b, a, data)
+    return y
 
 # Function to bin and smooth spike times
 def bin_and_smooth_spike_times(spike_times, bin_size=50, sigma=None):
@@ -83,7 +91,7 @@ def plot_heatmap(smoothed_spikes_matrix, subunit_names, time_bins, fig, axs, zoo
                        extent=[time_bins[0], time_bins[-1], len(subunit_names), 0])
 
     # Set labels and titles
-    axs[0].set_title('Heatmap des Temps de Spike Lissés')
+    # axs[0].set_title('Heatmap')
     axs[0].set_xlabel('Temps (ms)')
     axs[0].set_ylabel('Subunits')
     axs[0].set_yticks(np.arange(len(subunit_names)))  # Set the tick positions
@@ -93,17 +101,21 @@ def plot_heatmap(smoothed_spikes_matrix, subunit_names, time_bins, fig, axs, zoo
 
     # Set x-axis limits for zooming if zoom_start and zoom_end are provided
     if zoom_start is not None and zoom_end is not None:
-        axs[0].set_xlim(zoom_start, zoom_end)
+        axs[0].set_xlim(zoom_start*1000, zoom_end*1000)
 
 
 
 # Function to plot the force signal
 def plot_force(tdt_signals, axs, zoom_start=None, zoom_end=None):
     force_signal = tdt_signals['Levier']
+    
     force_sampling_rate = 1017.3  # 1017.3 Hz for the force signal
     total_time_force = len(force_signal) * (1 / force_sampling_rate)
     time_force = np.arange(0, total_time_force, 1 / force_sampling_rate)
-
+    force_signal = (force_signal - 294) * 1.95  # Convert to grams
+    cutoff = 30  # Cutoff frequency for the low-pass filter
+    force_signal = apply_lowpass_filter(force_signal, cutoff, force_sampling_rate)
+    
     # Apply zoom if zoom_start and zoom_end are provided
     if zoom_start is not None and zoom_end is not None:
         zoom_indices = (time_force >= zoom_start) & (time_force <= zoom_end)
@@ -115,7 +127,7 @@ def plot_force(tdt_signals, axs, zoom_start=None, zoom_end=None):
     axs[1].plot(time_force, force_signal, label='Signal de Force')
     # axs[1].set_title('Signal de Force')
     axs[1].set_xlabel('Temps (s)')
-    axs[1].set_ylabel('Force')
+    axs[1].set_ylabel('Force (g)')
     axs[1].grid(True)
 
 # Function to plot kinematic positions (X and Y)
@@ -152,7 +164,7 @@ def plot_kinematics(kinematics_data, t_0_times, axs, plot_x=True, plot_y=True, s
             if plot_y:
                 axs[2].plot(time, trial_data_y, label=f'Y {key}', color=color, alpha=0.6)
 
-    axs[2].set_title('Positions Kinématiques X et Y')
+    # axs[2].set_title('Positions Kinématiques X et Y')
     axs[2].set_xlabel('Temps (s)')
     axs[2].set_ylabel('Position')
     axs[2].grid(True)
@@ -280,88 +292,92 @@ def handle_selection():
 root = tk.Tk()
 root.title("Outil de Sélection Interactive")
 
-# Section pour la sélection des axes X et Y
-x_var = tk.IntVar(value=1)  # Sélectionné par défaut
-y_var = tk.IntVar(value=1)
+# Variables to store checkbox values
+subunit_1_var = tk.IntVar(value=1)  # 1 means selected by default
+subunit_2_var = tk.IntVar(value=1)
+x_var = tk.IntVar(value=1)  # X-axis selected by default
+y_var = tk.IntVar(value=1)  # Y-axis selected by default
+z_score_var = tk.IntVar(value=0)  # Z-score checkbox is deselected by default
 
-x_checkbox = tk.Checkbutton(root, text="Afficher X", variable=x_var)
-y_checkbox = tk.Checkbutton(root, text="Afficher Y", variable=y_var)
+# Frame for Channels section
+frame_channels = tk.Frame(root)
+frame_channels.pack(padx=10, pady=10, side=tk.LEFT)
 
+channel_label = tk.Label(frame_channels, text="Entrer les Canaux (ex: 1-3, 5, 7):")
+channel_label.pack()
+
+channel_entry = tk.Entry(frame_channels)
+channel_entry.insert(0, '1-32')  # Valeur par défaut
+channel_entry.pack()
+
+# Subunit Selection
+subunit_label = tk.Label(frame_channels, text="Select Subunits:")
+subunit_label.pack()
+
+subunit_1_checkbox = tk.Checkbutton(frame_channels, text="Subunit 1", variable=subunit_1_var)
+subunit_2_checkbox = tk.Checkbutton(frame_channels, text="Subunit 2", variable=subunit_2_var)
+subunit_1_checkbox.pack()
+subunit_2_checkbox.pack()
+
+# Zoom Section
+zoom_start_label = tk.Label(frame_channels, text="Début du Zoom (s):")
+zoom_start_label.pack()
+
+zoom_start_entry = tk.Entry(frame_channels)
+zoom_start_entry.pack()
+
+zoom_end_label = tk.Label(frame_channels, text="Fin du Zoom (s):")
+zoom_end_label.pack()
+
+zoom_end_entry = tk.Entry(frame_channels)
+zoom_end_entry.pack()
+
+# Frame for Processing section
+frame_processing = tk.Frame(root)
+frame_processing.pack(padx=10, pady=10, side=tk.LEFT)
+
+# Bin size
+bin_size_label = tk.Label(frame_processing, text="Entrer la Taille des Bins (ms):")
+bin_size_label.pack()
+
+bin_size_entry = tk.Entry(frame_processing)
+bin_size_entry.insert(0, "50")  # Valeur par défaut
+bin_size_entry.pack()
+
+# Sigma input
+sigma_label = tk.Label(frame_processing, text="Entrer le Sigma (pour le filtre gaussien):")
+sigma_label.pack()
+
+sigma_entry = tk.Entry(frame_processing)
+sigma_entry.insert(0, "1.0")  # Valeur par défaut
+sigma_entry.pack()
+
+# Z-score checkbox
+z_score_checkbox = tk.Checkbutton(frame_processing, text="Appliquer la Normalisation Z-Score", variable=z_score_var)
+z_score_checkbox.pack()
+
+# Apply button (right below the Z-score checkbox)
+apply_button = tk.Button(frame_processing, text="Obtenir la Sélection et Traiter", command=handle_selection)
+apply_button.pack(pady=10)
+
+# Frame for Kinematics section
+frame_kinematics = tk.Frame(root)
+frame_kinematics.pack(padx=10, pady=10, side=tk.LEFT)
+
+# Axes Selection (X, Y)
+x_checkbox = tk.Checkbutton(frame_kinematics, text="Afficher X", variable=x_var)
+y_checkbox = tk.Checkbutton(frame_kinematics, text="Afficher Y", variable=y_var)
 x_checkbox.pack()
 y_checkbox.pack()
 
-# Section pour la sélection des positions
+# Position checkboxes
 position_vars = {}
 position_labels = ['start', 'middle', 'tip', 'angle_left', 'angle_right']
 
 for pos in position_labels:
-    position_vars[pos] = tk.IntVar(value=1)  # Par défaut, toutes les positions sont sélectionnées
-    position_checkbox = tk.Checkbutton(root, text=pos, variable=position_vars[pos])
+    position_vars[pos] = tk.IntVar(value=1)  # Default selected
+    position_checkbox = tk.Checkbutton(frame_kinematics, text=pos, variable=position_vars[pos])
     position_checkbox.pack()
 
-# Section pour la sélection des canaux
-channel_label = tk.Label(root, text="Entrer les Canaux (ex: 1-3, 5, 7):")
-channel_label.pack()
-
-channel_entry = tk.Entry(root)
-channel_entry.insert(0, '1-32')  # Valeur par défaut
-channel_entry.pack()
-
-# Section for subunit selection
-subunit_label = tk.Label(root, text="Select Subunits:")
-subunit_label.pack()
-
-# Variables to store checkbox values
-subunit_1_var = tk.IntVar(value=1)  # 1 means selected by default
-subunit_2_var = tk.IntVar(value=1)
-
-# Checkboxes for subunit selection
-subunit_1_checkbox = tk.Checkbutton(root, text="Subunit 1", variable=subunit_1_var)
-subunit_2_checkbox = tk.Checkbutton(root, text="Subunit 2", variable=subunit_2_var)
-
-# Display checkboxes
-subunit_1_checkbox.pack()
-subunit_2_checkbox.pack()
-
-
-# Section pour l'option de normalisation Z-Score
-z_score_var = tk.IntVar(value=0)  # Non sélectionné par défaut
-z_score_checkbox = tk.Checkbutton(root, text="Appliquer la Normalisation Z-Score", variable=z_score_var)
-z_score_checkbox.pack()
-
-# Section pour la taille des bins
-bin_size_label = tk.Label(root, text="Entrer la Taille des Bins (ms):")
-bin_size_label.pack()
-
-bin_size_entry = tk.Entry(root)
-bin_size_entry.insert(0, "50")  # Valeur par défaut
-bin_size_entry.pack()
-
-# Section pour le sigma
-sigma_label = tk.Label(root, text="Entrer le Sigma (pour le filtre gaussien):")
-sigma_label.pack()
-
-sigma_entry = tk.Entry(root)
-sigma_entry.insert(0, "1.0")  # Valeur par défaut
-sigma_entry.pack()
-
-# Section pour le début du zoom
-zoom_start_label = tk.Label(root, text="Début du Zoom (ms):")
-zoom_start_label.pack()
-
-zoom_start_entry = tk.Entry(root)
-zoom_start_entry.pack()
-
-# Section pour la fin du zoom
-zoom_end_label = tk.Label(root, text="Fin du Zoom (ms):")
-zoom_end_label.pack()
-
-zoom_end_entry = tk.Entry(root)
-zoom_end_entry.pack()
-
-# Bouton pour gérer la sélection et afficher les résultats
-selection_button = tk.Button(root, text="Obtenir la Sélection et Traiter", command=handle_selection)
-selection_button.pack()
-
-# Lancer la boucle principale
+# Start the GUI main loop
 root.mainloop()
