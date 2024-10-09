@@ -184,7 +184,7 @@ def process_combination(bin_size, smoothing_length, spike_times_list, duration, 
     
     if binned_data.size == 0:
         print(f"No data to process for bin_size {bin_size}s and smoothing_length {smoothing_length}s.")
-        return None
+        return
     
     # Lissage des données
     smoothed_data = smooth_data(binned_data, sigma=sigma)
@@ -249,11 +249,11 @@ if __name__ == '__main__':
     if not spike_times_list:
         raise ValueError("No spike times were extracted. Please check your unit selection and data.")
     
-    duration_list = [np.max(spike_times) for spike_times in spike_times_list if len(spike_times) > 0]
+    duration_list = [np.max(np.array(spike_times, dtype=float)) for spike_times in spike_times_list if len(spike_times) > 0]
     if duration_list:
         duration = max(duration_list)
     else:
-        raise ValueError("No spike times found in the data.")
+        raise ValueError("No valid numeric spike times found in the data.")
     
     # Définir les tailles de bin et les longueurs de lissage
     bin_sizes = [0.005, 0.01, 0.02, 0.05]
