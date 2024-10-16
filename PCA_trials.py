@@ -78,6 +78,21 @@ def apply_pca_torch(data, n_components=None, return_components=False):
     else:
         return pca_result, explained_variance
 
+# Function to visualize variance explained by PCA
+def plot_variance_explained_single(explained_variance):
+    components = np.arange(1, len(explained_variance) + 1)
+    cumulative_variance = np.cumsum(explained_variance) * 100
+    plt.figure(figsize=(8, 6))
+    plt.bar(components, explained_variance * 100, alpha=0.7, label='Variance explained by component')
+    plt.plot(components, cumulative_variance, marker='o', color='red', label='Cumulative variance')
+    plt.xlabel('Principal Component')
+    plt.ylabel('Variance Explained (%)')
+    plt.title('Variance Explained by Principal Components')
+    plt.ylim(0, 100)
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
 # Function to apply UMAP
 def apply_umap(data, n_components=3):
     umap = UMAP(n_components=n_components)
@@ -211,7 +226,9 @@ if __name__ == "__main__":
         pca_result, explained_variance, pca_components = apply_pca_torch(all_smoothed_data_T, return_components=True)
     except Exception as e:
         print(f"PCA failed for bin_size {bin_size}s and smoothing_length {smoothing_length}s: {e}")
-        exit()
+
+    # Visualize variance explained by PCA
+    plot_variance_explained_single(explained_variance)
 
     # Apply UMAP
     umap_result = apply_umap(all_smoothed_data_T)
