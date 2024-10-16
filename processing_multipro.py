@@ -144,7 +144,7 @@ def run_in_parallel(spike_times_list, duration, bin_sizes, smoothing_lengths):
     return dict(pca_results), dict(explained_variance_results), dict(umap_results), dict(tsne_results), bin_edges_dict
 
 # Function to plot the results
-def plot_grid_results(results, bin_sizes, smoothing_lengths, title_prefix, event_times, bin_edges_dict):
+def plot_grid_results(results, bin_sizes, smoothing_lengths, title_prefix, event_times, bin_edges_dict, display='all'):
     combinations = list(product(bin_sizes, smoothing_lengths))
     n_rows = len(bin_sizes)
     n_cols = len(smoothing_lengths)
@@ -161,10 +161,12 @@ def plot_grid_results(results, bin_sizes, smoothing_lengths, title_prefix, event
 
         if result is not None and bin_edges is not None:
             if result.shape[1] >= 3:
-                ax.scatter(result[:, 0], result[:, 1], result[:, 2], s=5, alpha=0.3, label='Overall Projection')
-                event_indices = [np.argmin(np.abs(bin_times - t)) for t in event_times if t >= bin_times[0] and t <= bin_times[-1]]
-                event_data = result[event_indices, :3]
-                ax.scatter(event_data[:, 0], event_data[:, 1], event_data[:, 2], s=20, color='r', alpha=0.8, label='Event Times')
+                if display in ['all', 'projection']:
+                    ax.scatter(result[:, 0], result[:, 1], result[:, 2], s=5, alpha=0.1, label='Overall Projection')
+                if display in ['all', 'events']:
+                    event_indices = [np.argmin(np.abs(bin_times - t)) for t in event_times if t >= bin_times[0] and t <= bin_times[-1]]
+                    event_data = result[event_indices, :3]
+                    ax.scatter(event_data[:, 0], event_data[:, 1], event_data[:, 2], s=20, color='r', alpha=0.8, label='Event Times')
             else:
                 ax.text(0.5, 0.5, 'Not enough components', horizontalalignment='center', verticalalignment='center')
         else:
@@ -215,7 +217,8 @@ if __name__ == '__main__':
     tdt_signals = load_data(tdt_file)
     t_0_times = tdt_signals['Event Time']
 
-    unit_selection = 'both'
+    display = 'all'  # Choisir entre 'all', 'events', ou 'projection'
+    unit_selection = 'unit2' # Choisir entre 'both', 'unit1', ou 'unit2'
     spike_times_dict = extract_spike_times(data_dict, unit_selection)
     spike_times_list = list(spike_times_dict.values())
 
@@ -235,8 +238,8 @@ if __name__ == '__main__':
         spike_times_list, duration, bin_sizes, smoothing_lengths
     )
 
-    plot_grid_results(pca_results, bin_sizes, smoothing_lengths, title_prefix='PCA', event_times=t_0_times, bin_edges_dict=bin_edges_dict)
-    plot_grid_results(umap_results, bin_sizes, smoothing_lengths, title_prefix='UMAP', event_times=t_0_times, bin_edges_dict=bin_edges_dict)
-    plot_grid_results(tsne_results, bin_sizes, smoothing_lengths, title_prefix='t-SNE', event_times=t_0_times, bin_edges_dict=bin_edges_dict)
+    plot_grid_results(pca_results, bin_sizes, smoothing_lengths, title_prefix='PCA', event_times=t_0_times, bin_edges_dict=bin_edges_dict, display=display)
+    plot_grid_results(umap_results, bin_sizes, smoothing_lengths, title_prefix='UMAP', event_times=t_0_times, bin_edges_dict=bin_edges_dict, display=display)
+    plot_grid_results(tsne_results, bin_sizes, smoothing_lengths, title_prefix='t-SNE', event_times=t_0_times, bin_edges_dict=bin_edges_dict, display=display)
 
     plot_variance_explained(explained_variance_results, bin_sizes, smoothing_lengths)
