@@ -93,7 +93,7 @@ def apply_tsne(data, n_components=3, perplexity=30, n_iter=1000):
 # Function to process a combination of bin_size and smoothing_length
 def process_combination(bin_size, smoothing_length, spike_times_list, bin_edges, pca_results, explained_variance_results, umap_results, tsne_results):
     binned_data = bin_spike_times(spike_times_list, bin_edges)
-    sigma = smoothing_length / bin_size
+    sigma = (smoothing_length / bin_size) / 2
     if binned_data.size == 0:
         print(f"No data to process for bin_size {bin_size}s and smoothing_length {smoothing_length}s.")
         return
@@ -144,7 +144,7 @@ def run_in_parallel(spike_times_list, duration, bin_sizes, smoothing_lengths):
     return dict(pca_results), dict(explained_variance_results), dict(umap_results), dict(tsne_results), bin_edges_dict
 
 # Function to plot the results
-def plot_grid_results(results, bin_sizes, smoothing_lengths, title_prefix, event_times, bin_edges_dict, display='all'):
+def plot_grid_results(results, bin_sizes, smoothing_lengths, title_prefix, event_times, bin_edges_dict):
     combinations = list(product(bin_sizes, smoothing_lengths))
     n_rows = len(bin_sizes)
     n_cols = len(smoothing_lengths)
@@ -161,12 +161,31 @@ def plot_grid_results(results, bin_sizes, smoothing_lengths, title_prefix, event
 
         if result is not None and bin_edges is not None:
             if result.shape[1] >= 3:
+                # Define the time intervals for 1 second before, during, and after stimulation
+                pre_stim = 1  # 1 second before T_0
+                post_stim = 2  # 2 seconds after T_0
+                
                 if display in ['all', 'projection']:
-                    ax.scatter(result[:, 0], result[:, 1], result[:, 2], s=5, alpha=0.1, label='Overall Projection')
+                # Base projection (optional, default color)
+                    ax.scatter(result[:, 0], result[:, 1], result[:, 2], s=5, alpha=0.3, label='Overall Projection')
                 if display in ['all', 'events']:
-                    event_indices = [np.argmin(np.abs(bin_times - t)) for t in event_times if t >= bin_times[0] and t <= bin_times[-1]]
-                    event_data = result[event_indices, :3]
-                    ax.scatter(event_data[:, 0], event_data[:, 1], event_data[:, 2], s=20, color='r', alpha=0.8, label='Event Times')
+                # Find the indices corresponding to each time segment
+                    indices_pre = np.where((bin_times >= event_times[0] - pre_stim) & (bin_times < event_times[0]))[0]  # 1s before T_0
+                    indices_during = np.where((bin_times >= event_times[0]) & (bin_times < event_times[0] + 1))[0]  # 1s around T_0
+                    indices_post = np.where((bin_times >= event_times[0] + 1) & (bin_times < event_times[0] + post_stim))[0]  # 1s after T_0
+
+                    # Scatter plot with different colors for each interval
+                    if len(indices_pre) > 0:
+                        ax.scatter(result[indices_pre, 0], result[indices_pre, 1], result[indices_pre, 2], s=20, color='red', alpha=0.8, label='1s Before')
+
+                    if len(indices_during) > 0:
+                        ax.scatter(result[indices_during, 0], result[indices_during, 1], result[indices_during, 2], s=20, color='purple', alpha=0.8, label='1s During')
+
+                    if len(indices_post) > 0:
+                        ax.scatter(result[indices_post, 0], result[indices_post, 1], result[indices_post, 2], s=20, color='green', alpha=0.8, label='1s After')
+
+                    # Add a legend to describe the intervals
+                    ax.legend()
             else:
                 ax.text(0.5, 0.5, 'Not enough components', horizontalalignment='center', verticalalignment='center')
         else:
@@ -180,6 +199,7 @@ def plot_grid_results(results, bin_sizes, smoothing_lengths, title_prefix, event
 
     fig.suptitle(f'{title_prefix} 3D Projections', fontsize=16)
     plt.show()
+
 
 # Function to plot explained variance
 def plot_variance_explained(explained_variance_dict, bin_sizes, smoothing_lengths):
