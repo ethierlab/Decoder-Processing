@@ -7,6 +7,7 @@ from sklearn.manifold import TSNE
 from umap import UMAP
 from scipy.ndimage import gaussian_filter1d
 from scipy.interpolate import interp1d
+from multiprocessing import Pool, cpu_count
 
 # Function to load a pickle file
 def load_data(pkl_file):
@@ -106,9 +107,9 @@ def apply_tsne(data, n_components=3):
     return tsne_result
 
 # Function to project and visualize PCA, UMAP, and t-SNE around events
-def project_and_visualize(data, method_name, event_times, window_start=-1.0, window_end=2.0, n_components=3, trial_selection='all'):
+def project_and_visualize(data, method_name, event_times, bin_size, window_start=-1.0, window_end=2.0, n_components=3, trial_selection='all'):
     # Define a common time grid
-    common_times = np.arange(window_start, window_end, bin_times[1] - bin_times[0])
+    common_times = np.arange(window_start, window_end, bin_size)  # Assuming bin_size is 0.01
 
     # Initialize a list to store the extracted data for each T_0
     extracted_all_events = []
@@ -131,7 +132,7 @@ def project_and_visualize(data, method_name, event_times, window_start=-1.0, win
         t0 = event_times[idx]
 
         # Shift times relative to T_0
-        relative_times = bin_times - t0
+        relative_times = np.arange(0, len(data)) * 0.01 - t0  # Calculating relative times from data length and bin size
 
         # Find indices corresponding to the time window [-1s, +2s]
         indices = np.where((relative_times >= window_start) & (relative_times <= window_end))[0]
@@ -154,7 +155,7 @@ def project_and_visualize(data, method_name, event_times, window_start=-1.0, win
         # Visualize the projection of the first 3 components for this event
         plt.figure(figsize=(10, 7))
         ax = plt.axes(projection='3d')
-        ax.plot(interpolated_data[:, 0], interpolated_data[:, 1], interpolated_data[:, 2])
+        ax.scatter(interpolated_data[:, 0], interpolated_data[:, 1], interpolated_data[:, 2])
 
         # Add markers for specific times (-1s, 0s, +2s)
         time_markers = {
@@ -182,6 +183,12 @@ def average_across_trials(extracted_data):
     average_data = np.mean(extracted_data_array, axis=0)  # Shape: (n_times, n_components)
     return average_data
 
+# Wrapper function for multiprocessing
+def process_unit(unit_key, spike_times, bin_size, duration, sigma):
+    binned_data, bin_times = bin_spike_times([spike_times], bin_size, duration)
+    smoothed_data = smooth_data(binned_data, sigma=sigma)
+    return unit_key, smoothed_data
+
 # Main code
 if __name__ == "__main__":
     pkl_file = 'experiment_data.pkl'
@@ -206,14 +213,13 @@ if __name__ == "__main__":
 
     bin_size = 0.01
     smoothing_length = 0.02
-    sigma = smoothing_length / bin_size
+    sigma = (smoothing_length / bin_size) /2
 
-    smoothed_data_dict = {}
+    # Use multiprocessing to process each unit in parallel
+    with Pool(cpu_count()) as pool:
+        results = pool.starmap(process_unit, [(unit_key, spike_times, bin_size, duration, sigma) for unit_key, spike_times in spike_times_dict.items()])
 
-    for unit_key, spike_times in spike_times_dict.items():
-        binned_data, bin_times = bin_spike_times([spike_times], bin_size, duration)
-        smoothed_data = smooth_data(binned_data, sigma=sigma)
-        smoothed_data_dict[unit_key] = smoothed_data
+    smoothed_data_dict = {unit_key: smoothed_data for unit_key, smoothed_data in results}
 
     all_smoothed_data = np.vstack([data for data in smoothed_data_dict.values()])
     all_smoothed_data_T = all_smoothed_data.T
@@ -226,9 +232,10 @@ if __name__ == "__main__":
         pca_result, explained_variance, pca_components = apply_pca_torch(all_smoothed_data_T, return_components=True)
     except Exception as e:
         print(f"PCA failed for bin_size {bin_size}s and smoothing_length {smoothing_length}s: {e}")
+        exit()
 
     # Visualize variance explained by PCA
-    plot_variance_explained_single(explained_variance)
+    # plot_variance_explained_single(explained_variance)
 
     # Apply UMAP
     umap_result = apply_umap(all_smoothed_data_T)
@@ -236,13 +243,10 @@ if __name__ == "__main__":
     # Apply t-SNE
     tsne_result = apply_tsne(all_smoothed_data_T)
 
-    # Visualize variance explained by PCA
-    plot_variance_explained_single(explained_variance)
-
     # Project and visualize PCA, UMAP, and t-SNE
-    pca_extracted = project_and_visualize(pca_result, 'PCA', t_0_times, window_start=-1.0, window_end=2.0, trial_selection=trial_selection)
-    umap_extracted = project_and_visualize(umap_result, 'UMAP', t_0_times, window_start=-1.0, window_end=2.0, trial_selection=trial_selection)
-    tsne_extracted = project_and_visualize(tsne_result, 't-SNE', t_0_times, window_start=-1.0, window_end=2.0, trial_selection=trial_selection)
+    pca_extracted = project_and_visualize(pca_result, 'PCA', t_0_times, bin_size, window_start=-1.0, window_end=2.0, trial_selection=trial_selection)
+    umap_extracted = project_and_visualize(umap_result, 'UMAP', t_0_times, bin_size, window_start=-1.0, window_end=2.0, trial_selection=trial_selection)
+    tsne_extracted = project_and_visualize(tsne_result, 't-SNE', t_0_times, bin_size, window_start=-1.0, window_end=2.0, trial_selection=trial_selection)
 
     # Average across all trials for PCA, UMAP, and t-SNE
     pca_average = average_across_trials(pca_extracted)
