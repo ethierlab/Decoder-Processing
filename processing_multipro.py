@@ -1,12 +1,15 @@
 import numpy as np
 import pickle
 import torch
+import multiprocessing
+import math
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 from itertools import product
 from scipy.ndimage import gaussian_filter1d
 from sklearn.manifold import TSNE
 from umap import UMAP
-import multiprocessing
+
 
 # Function to load the pkl file
 def load_data(pkl_file):
@@ -82,16 +85,21 @@ def apply_umap(data, n_neighbors=15, min_dist=0.1, n_components=3):
             raise ValueError(f"n_neighbors ({n_neighbors}) is larger than the number of samples ({data.shape[0]})")
         
         # Run UMAP
-        umap_model = UMAP(n_neighbors=n_neighbors, min_dist=min_dist, n_components=2)
+        umap_model = UMAP(n_neighbors=n_neighbors, min_dist=min_dist, n_components=n_components)
         umap_result = umap_model.fit_transform(data)
         
+        if umap_result is None or umap_result.size == 0:
+            raise ValueError("UMAP returned an empty result.")
+        
         # Return result if successful
+        print(f"UMAP completed successfully. Returning result.")
         return umap_result
     
     except Exception as e:
         # Print error message
         print(f"Error occurred in UMAP: {str(e)}")
         return None
+
 
 # Function to apply t-SNE
 def apply_tsne(data, n_components=3, perplexity=30, n_iter=1000, learning_rate=200, early_exaggeration=12, metric='euclidean'):
@@ -116,7 +124,7 @@ def process_combination(bin_size, smoothing_length, spike_times_list, bin_edges,
         return
     print(f"Binned data size: {binned_data.size}")  # Debug
 
-    smoothed_data = smooth_data(binned_data, sigma=sigma) 
+    smoothed_data = smooth_data(binned_data, sigma=sigma)
     smoothed_data_T = smoothed_data.T
     print(f"Smoothed data shape: {smoothed_data_T.shape}")  # Debug
 
@@ -131,23 +139,19 @@ def process_combination(bin_size, smoothing_length, spike_times_list, bin_edges,
             if method == 'PCA':
                 try:
                     pca_result, explained_variance = apply_pca(smoothed_data_T, n_components=config['n_components'])
-                    results_dict[f'PCA_{config_index}'][(bin_size, smoothing_length)] = pca_result[:, :3]
-                    # Store explained variance
-                    results_dict[f'PCA_variance_{config_index}'][(bin_size, smoothing_length)] = explained_variance
+                    result_key = (method, config_index, bin_size, smoothing_length)
+                    results_dict[result_key] = (pca_result[:, :3], explained_variance)
                 except Exception as e:
                     print(f"PCA failed for config {config_index}, bin_size {bin_size}s: {e}")
             elif method == 'UMAP':
-                try:
-                    print(f"Running UMAP with data shape: {smoothed_data_T.shape}")
-                    n_neighbors = min(config['n_neighbors'], smoothed_data_T.shape[0] - 1)
-                    if n_neighbors < 2:
-                        print(f"n_neighbors too small for UMAP config {config_index}, bin_size {bin_size}s")
-                        continue
+                try:                  
                     umap_result = apply_umap(smoothed_data_T, n_neighbors=config['n_neighbors'], min_dist=config['min_dist'], n_components=config['n_components'])
-                    
-                    results_dict[f'UMAP_{config_index}'][(bin_size, smoothing_length)] = umap_result
+                    result_key = (method, config_index, bin_size, smoothing_length)
+                    results_dict[result_key] = umap_result
+
                 except Exception as e:
                     print(f"UMAP failed for config {config_index}, bin_size {bin_size}s: {e}")
+
             elif method == 't-SNE':
                 try:
                     tsne_result = apply_tsne(
@@ -159,7 +163,8 @@ def process_combination(bin_size, smoothing_length, spike_times_list, bin_edges,
                         early_exaggeration=config['early_exaggeration'],
                         metric=config['metric']
                     )
-                    results_dict[f't-SNE_{config_index}'][(bin_size, smoothing_length)] = tsne_result
+                    result_key = (method, config_index, bin_size, smoothing_length)
+                    results_dict[result_key] = tsne_result
                 except Exception as e:
                     print(f"t-SNE failed for config {config_index}, bin_size {bin_size}s: {e}")
 
@@ -186,29 +191,36 @@ def run_in_parallel(spike_times_list, duration, bin_sizes, smoothing_lengths, me
     for process in processes:
         process.join()
 
+    # Convert manager dict to a regular dict
     return dict(results_dict), bin_edges_dict
 
 # Function to plot the results
-def plot_grid_results(results, bin_sizes, smoothing_lengths, title_prefix, event_times, bin_edges_dict, display='all'):
-    combinations = list(product(bin_sizes, smoothing_lengths))
-    n_rows = len(bin_sizes)
-    n_cols = len(smoothing_lengths)
+def plot_results_by_configuration(results, title_prefix, event_times, bin_edges_dict, display='all', graph='group'):
+    num_plots = len(results)
 
-    fig = plt.figure(figsize=(4 * n_cols, 4 * n_rows))
-    plt.subplots_adjust(hspace=0.4, wspace=0.4)
+    if graph == 'group':
+        # Determine grid size
+        num_cols = math.ceil(math.sqrt(num_plots))
+        num_rows = math.ceil(num_plots / num_cols)
 
-    plot_num = 1
-    for bin_size, smoothing_length in combinations:
-        result = results.get((bin_size, smoothing_length))
+        fig = plt.figure(figsize=(4 * num_cols, 4 * num_rows))
+        plt.subplots_adjust(hspace=0.4, wspace=0.4)
+
+    for idx, ((bin_size, smoothing_length), result) in enumerate(results.items()):
+        if graph == 'group':
+            ax = fig.add_subplot(num_rows, num_cols, idx + 1, projection='3d')
+        elif graph == 'single':
+            fig = plt.figure(figsize=(8, 6))
+            ax = fig.add_subplot(111, projection='3d')
+
         bin_edges = bin_edges_dict.get(bin_size)
         bin_times = (bin_edges[:-1] + bin_edges[1:]) / 2
-        ax = fig.add_subplot(n_rows, n_cols, plot_num, projection='3d')
 
         if result is not None and bin_edges is not None:
             if result.shape[1] >= 3:
                 # Base projection (optional, default color) if selected in display settings
                 if display in ['all', 'projection']:
-                    ax.scatter(result[:, 0], result[:, 1], result[:, 2], s=5, alpha=0.3, label='Overall Projection')
+                    ax.scatter(result[:, 0], result[:, 1], result[:, 2], s=5, alpha=0.1, label='Overall Projection')
 
                 # Vectorized computation for all t_0_times if selected in display settings
                 if display in ['all', 'events']:
@@ -229,20 +241,26 @@ def plot_grid_results(results, bin_sizes, smoothing_lengths, title_prefix, event
 
                     if np.any(post_mask):
                         ax.scatter(result[post_mask, 0], result[post_mask, 1], result[post_mask, 2], s=20, color='green', alpha=0.8, label='1s After')
+                if graph == 'single':
+                    ax.legend()
 
             else:
                 ax.text(0.5, 0.5, 0.5, 'Not enough components', horizontalalignment='center', verticalalignment='center')
         else:
             ax.text(0.5, 0.5, 0.5, 'No data', horizontalalignment='center', verticalalignment='center')
 
-        ax.text2D(0.05, 0.95, f"Bin Size: {bin_size}s\nSmooth Length: {smoothing_length}s", transform=ax.transAxes)
+        ax.set_title(f"Bin: {bin_size}s\nSmooth: {smoothing_length}s")
         ax.set_xlabel('Component 1')
         ax.set_ylabel('Component 2')
         ax.set_zlabel('Component 3')
-        plot_num += 1
 
-    fig.suptitle(f'{title_prefix} 3D Projections', fontsize=16)
-    plt.show()
+        if graph == 'single':
+            fig.suptitle(f'{title_prefix} 3D Projection', fontsize=16)
+            plt.show()
+
+    if graph == 'group':
+        fig.suptitle(f'{title_prefix} 3D Projections', fontsize=16)
+        plt.show()
 
 # Function to plot explained variance
 def plot_variance_explained(explained_variance_dict, bin_sizes, smoothing_lengths):
@@ -287,6 +305,7 @@ if __name__ == '__main__':
     t_0_times = tdt_signals['Event Time']
 
     display = 'all'  # Choisir entre 'all', 'events', ou 'projection'
+    graph = 'group'  # Choose between 'single' or 'group'
     unit_selection = 'unit2' # Choisir entre 'both', 'unit1', ou 'unit2'
     # Define which methods to run
     methods_to_run = ['UMAP']  # You can modify this to select one, two, or all methods ('PCA', 'UMAP', 't-SNE').
@@ -334,22 +353,41 @@ if __name__ == '__main__':
     # Run selected methods with their configurations
     all_results, bin_edges_dict = run_in_parallel(spike_times_list, duration, bin_sizes, smoothing_lengths, selected_methods)
 
+    # Process and plot the results
     for method in selected_methods:
         for config_index in range(len(selected_methods[method])):
-            result_key = f'{method}_{config_index}'
-            if result_key in all_results:  # Check if the result exists
-                plot_grid_results(
-                    all_results[f'{method}_{config_index}'], 
-                    bin_sizes, 
-                    smoothing_lengths, 
-                    title_prefix=f'{method} Config {config_index + 1}', 
-                    event_times=t_0_times, 
+            # Collect all results for this method and configuration
+            result_dict = {}
+            variance_dict = {}  # For PCA variance explained
+            for key, value in all_results.items():
+                key_method, key_config_index, bin_size, smoothing_length = key
+                if key_method == method and key_config_index == config_index:
+                    if method == 'PCA':
+                        # value is a tuple: (pca_result, explained_variance)
+                        pca_result, explained_variance = value
+                        result_dict[(bin_size, smoothing_length)] = pca_result
+                        variance_dict[(bin_size, smoothing_length)] = explained_variance
+                    else:
+                        # value is the result (e.g., UMAP or t-SNE result)
+                        result_dict[(bin_size, smoothing_length)] = value
+
+            if result_dict:
+                # Plot all the results for this configuration
+                plot_results_by_configuration(
+                    result_dict,
+                    title_prefix=f'{method} Config {config_index + 1}',
+                    event_times=t_0_times,
                     bin_edges_dict=bin_edges_dict,
-                    display=display
+                    display=display,
+                    graph=graph  # Pass the graph parameter
                 )
-                # Plot variance explained for PCA configurations
+
+                # For PCA, also plot the variance explained
                 if method == 'PCA':
-                    variance_key = f'PCA_variance_{config_index}'
-                    plot_variance_explained(all_results[variance_key], bin_sizes, smoothing_lengths, title_prefix=f'PCA Config {config_index + 1}')
+                    plot_variance_explained(
+                        variance_dict,
+                        bin_sizes,
+                        smoothing_lengths
+                    )
             else:
-                print(f"No results found for {result_key}")
+                print(f"No results found for {method} Config {config_index}")
