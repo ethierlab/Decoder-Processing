@@ -4,6 +4,7 @@ import torch
 import multiprocessing
 import math
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 from mpl_toolkits.mplot3d import Axes3D
 from itertools import product
 from scipy.ndimage import gaussian_filter1d
@@ -76,29 +77,19 @@ def apply_pca(data, n_components=None):
 
 # Function to apply UMAP
 def apply_umap(data, n_neighbors=15, min_dist=0.1, n_components=3):
-    try:
-        # Log data shape
-        print(f"UMAP input data shape: {data.shape}")
         
-        # Ensure n_neighbors is valid
-        if n_neighbors >= data.shape[0]:
-            raise ValueError(f"n_neighbors ({n_neighbors}) is larger than the number of samples ({data.shape[0]})")
-        
-        # Run UMAP
-        umap_model = UMAP(n_neighbors=n_neighbors, min_dist=min_dist, n_components=n_components)
-        umap_result = umap_model.fit_transform(data)
-        
-        if umap_result is None or umap_result.size == 0:
-            raise ValueError("UMAP returned an empty result.")
-        
-        # Return result if successful
-        print(f"UMAP completed successfully. Returning result.")
-        return umap_result
+    # Ensure n_neighbors is valid
+    if n_neighbors >= data.shape[0]:
+        raise ValueError(f"n_neighbors ({n_neighbors}) is larger than the number of samples ({data.shape[0]})")
     
-    except Exception as e:
-        # Print error message
-        print(f"Error occurred in UMAP: {str(e)}")
-        return None
+    # Run UMAP
+    umap_model = UMAP(n_neighbors=n_neighbors, min_dist=min_dist, n_components=n_components)
+    umap_result = umap_model.fit_transform(data)
+    
+    if umap_result is None or umap_result.size == 0:
+        raise ValueError("UMAP returned an empty result.")
+    
+    return umap_result
 
 
 # Function to apply t-SNE
@@ -117,37 +108,47 @@ def apply_tsne(data, n_components=3, perplexity=30, n_iter=1000, learning_rate=2
     return tsne.fit_transform(data)
 
 def process_combination(bin_size, smoothing_length, spike_times_list, bin_edges, results_dict, method_configs):
+    print(f"[Process PID {multiprocessing.current_process().pid}] Started processing for bin_size={bin_size}, smoothing_length={smoothing_length}")
+
     binned_data = bin_spike_times(spike_times_list, bin_edges)
     sigma = (smoothing_length / bin_size) / 2
     if binned_data.size == 0:
         print(f"No data to process for bin_size {bin_size}s and smoothing_length {smoothing_length}s.")
         return
-    print(f"Binned data size: {binned_data.size}")  # Debug
 
     smoothed_data = smooth_data(binned_data, sigma=sigma)
     smoothed_data_T = smoothed_data.T
-    print(f"Smoothed data shape: {smoothed_data_T.shape}")  # Debug
 
     # Check for NaNs or infinite values in the data
     if np.any(np.isnan(smoothed_data_T)) or np.any(np.isinf(smoothed_data_T)):
         print(f"Invalid data (NaNs or infinite values) detected for bin_size {bin_size}s and smoothing_length {smoothing_length}s")
         return
-    
+
     # Run the selected methods and configurations
     for method, configs in method_configs.items():
         for config_index, config in enumerate(configs):
+            result_key = (method, config_index, bin_size, smoothing_length)
+            print(f"[Process PID {multiprocessing.current_process().pid}] Processing {method} config {config_index} for bin_size={bin_size}, smoothing_length={smoothing_length}")
+
             if method == 'PCA':
                 try:
                     pca_result, explained_variance = apply_pca(smoothed_data_T, n_components=config['n_components'])
-                    result_key = (method, config_index, bin_size, smoothing_length)
                     results_dict[result_key] = (pca_result[:, :3], explained_variance)
+                    print(f"[Process PID {multiprocessing.current_process().pid}] Completed PCA config {config_index}")
                 except Exception as e:
                     print(f"PCA failed for config {config_index}, bin_size {bin_size}s: {e}")
             elif method == 'UMAP':
-                try:                  
+                try:
+                    n_neighbors = min(config['n_neighbors'], smoothed_data_T.shape[0] - 1)
+                    if n_neighbors < 2:
+                        print(f"n_neighbors too small for UMAP config {config_index}, bin_size {bin_size}s")
+                        continue
+
                     umap_result = apply_umap(smoothed_data_T, n_neighbors=config['n_neighbors'], min_dist=config['min_dist'], n_components=config['n_components'])
-                    result_key = (method, config_index, bin_size, smoothing_length)
+
                     results_dict[result_key] = umap_result
+                    print(f"[Process PID {multiprocessing.current_process().pid}] Completed UMAP config {config_index}")
+
 
                 except Exception as e:
                     print(f"UMAP failed for config {config_index}, bin_size {bin_size}s: {e}")
@@ -163,10 +164,12 @@ def process_combination(bin_size, smoothing_length, spike_times_list, bin_edges,
                         early_exaggeration=config['early_exaggeration'],
                         metric=config['metric']
                     )
-                    result_key = (method, config_index, bin_size, smoothing_length)
                     results_dict[result_key] = tsne_result
+                    print(f"[Process PID {multiprocessing.current_process().pid}] Completed t-SNE config {config_index}")
                 except Exception as e:
                     print(f"t-SNE failed for config {config_index}, bin_size {bin_size}s: {e}")
+
+    print(f"[Process PID {multiprocessing.current_process().pid}] Finished processing for bin_size={bin_size}, smoothing_length={smoothing_length}")
 
 
 # Function to run multiprocessing for different combinations
@@ -174,7 +177,8 @@ def run_in_parallel(spike_times_list, duration, bin_sizes, smoothing_lengths, me
     manager = multiprocessing.Manager()
     results_dict = manager.dict()
     bin_edges_dict = {}
-
+    total_combinations = len(bin_sizes) * len(smoothing_lengths)
+    
     for bin_size in bin_sizes:
         bin_edges = np.arange(0, duration + bin_size, bin_size)
         bin_edges_dict[bin_size] = bin_edges
@@ -188,79 +192,142 @@ def run_in_parallel(spike_times_list, duration, bin_sizes, smoothing_lengths, me
         processes.append(process)
         process.start()
 
-    for process in processes:
+    # Use tqdm to display progress as processes complete
+    for process in tqdm(processes, desc='Processing combinations', unit='process'):
         process.join()
 
     # Convert manager dict to a regular dict
     return dict(results_dict), bin_edges_dict
 
 # Function to plot the results
-def plot_results_by_configuration(results, title_prefix, event_times, bin_edges_dict, display='all', graph='group'):
-    num_plots = len(results)
+def plot_grid_results(results, bin_sizes, smoothing_lengths, title_prefix, event_times, bin_edges_dict, display='all', graph='group', max_plots_per_figure=9, event_mean='yes'):
+    combinations = list(product(bin_sizes, smoothing_lengths))
+    num_plots = len(combinations)
 
-    if graph == 'group':
-        # Determine grid size
-        num_cols = math.ceil(math.sqrt(num_plots))
-        num_rows = math.ceil(num_plots / num_cols)
+    # Déterminer le nombre de figures nécessaires
+    num_figures = math.ceil(num_plots / max_plots_per_figure)
 
-        fig = plt.figure(figsize=(4 * num_cols, 4 * num_rows))
-        plt.subplots_adjust(hspace=0.4, wspace=0.4)
+    # Diviser les combinaisons en morceaux basés sur max_plots_per_figure
+    chunks = [combinations[i:i + max_plots_per_figure] for i in range(0, num_plots, max_plots_per_figure)]
 
-    for idx, ((bin_size, smoothing_length), result) in enumerate(results.items()):
+    for fig_num, chunk in enumerate(chunks):
+        num_subplots = len(chunk)
         if graph == 'group':
-            ax = fig.add_subplot(num_rows, num_cols, idx + 1, projection='3d')
+            num_cols = math.ceil(math.sqrt(num_subplots))
+            num_rows = math.ceil(num_subplots / num_cols)
+            fig = plt.figure(figsize=(4 * num_cols, 4 * num_rows))
+            plt.subplots_adjust(hspace=0.4, wspace=0.4)
         elif graph == 'single':
-            fig = plt.figure(figsize=(8, 6))
-            ax = fig.add_subplot(111, projection='3d')
+            pass  # Nous gérerons les graphiques uniques individuellement
 
-        bin_edges = bin_edges_dict.get(bin_size)
-        bin_times = (bin_edges[:-1] + bin_edges[1:]) / 2
+        for idx, (bin_size, smoothing_length) in enumerate(chunk):
+            result = results.get((bin_size, smoothing_length))
+            bin_edges = bin_edges_dict.get(bin_size)
+            bin_times = (bin_edges[:-1] + bin_edges[1:]) / 2
 
-        if result is not None and bin_edges is not None:
-            if result.shape[1] >= 3:
-                # Base projection (optional, default color) if selected in display settings
-                if display in ['all', 'projection']:
-                    ax.scatter(result[:, 0], result[:, 1], result[:, 2], s=5, alpha=0.1, label='Overall Projection')
+            if graph == 'group':
+                ax = fig.add_subplot(num_rows, num_cols, idx + 1, projection='3d')
+            elif graph == 'single':
+                fig = plt.figure(figsize=(8, 6))
+                ax = fig.add_subplot(111, projection='3d')
 
-                # Vectorized computation for all t_0_times if selected in display settings
-                if display in ['all', 'events']:
-                    pre_stim = 1  # 1 second before T_0
-                    post_stim = 2  # 2 seconds after T_0
+            if result is not None and bin_edges is not None:
+                if result.shape[1] >= 3:
+                    # Code existant pour tracer les points de dispersion
+                    if display in ['all', 'projection']:
+                        ax.scatter(result[:, 0], result[:, 1], result[:, 2], s=5, alpha=0.1, label='Overall Projection', zorder=1)
 
-                    # Create a mask for the entire set of event times (before, during, after)
-                    pre_mask = np.any([(bin_times >= t_0 - pre_stim) & (bin_times < t_0) for t_0 in event_times], axis=0)
-                    during_mask = np.any([(bin_times >= t_0) & (bin_times < t_0 + 1) for t_0 in event_times], axis=0)
-                    post_mask = np.any([(bin_times >= t_0 + 1) & (bin_times < t_0 + post_stim) for t_0 in event_times], axis=0)
+                    # Code existant pour tracer les événements
+                    if display in ['all', 'events']:
+                        pre_stim = 1  # 1 seconde avant t_0
+                        post_stim = 2  # 2 secondes après t_0
 
-                    # Scatter plot with different colors for each time segment
-                    if np.any(pre_mask):
-                        ax.scatter(result[pre_mask, 0], result[pre_mask, 1], result[pre_mask, 2], s=20, color='red', alpha=0.8, label='1s Before')
+                        # Tracer les événements
+                        pre_mask = np.any([(bin_times >= t_0 - pre_stim) & (bin_times < t_0) for t_0 in event_times], axis=0)
+                        during_mask = np.any([(bin_times >= t_0) & (bin_times < t_0 + 1) for t_0 in event_times], axis=0)
+                        post_mask = np.any([(bin_times >= t_0 + 1) & (bin_times < t_0 + post_stim) for t_0 in event_times], axis=0)
 
-                    if np.any(during_mask):
-                        ax.scatter(result[during_mask, 0], result[during_mask, 1], result[during_mask, 2], s=20, color='purple', alpha=0.8, label='1s During')
+                        if np.any(pre_mask):
+                            ax.scatter(
+                                result[pre_mask, 0], result[pre_mask, 1], result[pre_mask, 2],
+                                s=10, color='red', alpha=0.5, label='1s Before', zorder=2
+                            )
+                        if np.any(during_mask):
+                            ax.scatter(
+                                result[during_mask, 0], result[during_mask, 1], result[during_mask, 2],
+                                s=10, color='purple', alpha=0.5, label='1s During', zorder=2
+                            )
+                        if np.any(post_mask):
+                            ax.scatter(
+                                result[post_mask, 0], result[post_mask, 1], result[post_mask, 2],
+                                s=10, color='green', alpha=0.5, label='1s After', zorder=2
+                            )
 
-                    if np.any(post_mask):
-                        ax.scatter(result[post_mask, 0], result[post_mask, 1], result[post_mask, 2], s=20, color='green', alpha=0.8, label='1s After')
-                if graph == 'single':
-                    ax.legend()
+                        # Calculer et tracer la trajectoire moyenne si event_mean est 'yes'
+                        if event_mean == 'yes':
+                            mean_trajectory = []
+                            mean_times = []
+                            total_counts = []
 
+                            # Initialiser les tableaux pour le calcul de la trajectoire moyenne
+                            rel_time_bins = np.arange(-pre_stim, post_stim + bin_size, bin_size)
+                            mean_trajectory = np.zeros((len(rel_time_bins) - 1, result.shape[1]))
+                            count_trajectory = np.zeros(len(rel_time_bins) - 1)
+
+                            for t_0 in event_times:
+                                rel_times = bin_times - t_0
+                                mask = (rel_times >= -pre_stim) & (rel_times <= post_stim)
+                                rel_times_window = rel_times[mask]
+                                result_window = result[mask]
+
+                                # Discrétiser les temps relatifs en bins
+                                bin_indices = np.digitize(rel_times_window, rel_time_bins) - 1  # Les indices commencent à 0
+                                # Accumuler les sommes et les comptes pour la moyenne
+                                for i in range(len(rel_time_bins) - 1):
+                                    bin_mask = bin_indices == i
+                                    if np.any(bin_mask):
+                                        mean_trajectory[i] += np.sum(result_window[bin_mask], axis=0)
+                                        count_trajectory[i] += np.sum(bin_mask)
+
+                            # Calculer la trajectoire moyenne
+                            valid_bins = count_trajectory > 0
+                            mean_trajectory[valid_bins] /= count_trajectory[valid_bins, np.newaxis]
+                            mean_rel_times = (rel_time_bins[:-1] + rel_time_bins[1:]) / 2
+
+                            # Tracer la trajectoire moyenne
+                            if np.any(valid_bins):
+                                ax.plot(
+                                    mean_trajectory[valid_bins, 0],
+                                    mean_trajectory[valid_bins, 1],
+                                    mean_trajectory[valid_bins, 2],
+                                    color='yellow',
+                                    linewidth=2,
+                                    # marker='o',
+                                    markersize=4,
+                                    label='Mean Trajectory',
+                                    zorder=5
+                                )
+                        if graph == 'single':
+                            ax.legend()
+                else:
+                    ax.text(0.5, 0.5, 0.5, 'Not enough components', horizontalalignment='center', verticalalignment='center')
             else:
-                ax.text(0.5, 0.5, 0.5, 'Not enough components', horizontalalignment='center', verticalalignment='center')
-        else:
-            ax.text(0.5, 0.5, 0.5, 'No data', horizontalalignment='center', verticalalignment='center')
+                ax.text(0.5, 0.5, 0.5, 'No data', horizontalalignment='center', verticalalignment='center')
 
-        ax.set_title(f"Bin: {bin_size}s\nSmooth: {smoothing_length}s")
-        ax.set_xlabel('Component 1')
-        ax.set_ylabel('Component 2')
-        ax.set_zlabel('Component 3')
+            # Assurez-vous que les titres et les étiquettes d'axes sont définis pour tous les sous-graphiques
+            ax.set_title(f"Bin: {bin_size}s\nSmooth: {smoothing_length}s")
+            ax.set_xlabel('Component 1')
+            ax.set_ylabel('Component 2')
+            ax.set_zlabel('Component 3')
 
-        if graph == 'single':
-            fig.suptitle(f'{title_prefix} 3D Projection', fontsize=16)
+            if graph == 'single':
+                fig.suptitle(f'{title_prefix} 3D Projection', fontsize=16)
+                plt.show()
+
+        if graph == 'group':
+            fig.suptitle(f'{title_prefix} 3D Projections - Figure {fig_num + 1} of {num_figures}', fontsize=16)
             plt.show()
 
-    if graph == 'group':
-        fig.suptitle(f'{title_prefix} 3D Projections', fontsize=16)
-        plt.show()
 
 # Function to plot explained variance
 def plot_variance_explained(explained_variance_dict, bin_sizes, smoothing_lengths):
@@ -304,12 +371,13 @@ if __name__ == '__main__':
     tdt_signals = load_data(tdt_file)
     t_0_times = tdt_signals['Event Time']
 
-    display = 'all'  # Choisir entre 'all', 'events', ou 'projection'
+    display = 'events'  # Choisir entre 'all', 'events', ou 'projection'
     graph = 'group'  # Choose between 'single' or 'group'
+    max_plots_per_figure = 9  # Set the maximum number of plots per figure
+    event_mean = 'yes'   # Choose between 'yes' or 'no'
     unit_selection = 'unit2' # Choisir entre 'both', 'unit1', ou 'unit2'
-    # Define which methods to run
     methods_to_run = ['UMAP']  # You can modify this to select one, two, or all methods ('PCA', 'UMAP', 't-SNE').
-
+    
     # Define multiple t-SNE, PCA, and UMAP configurations
     tsne_configs = [
         {'perplexity': 30, 'learning_rate': 200, 'n_iter': 1000, 'early_exaggeration': 12, 'metric': 'euclidean'},
@@ -318,7 +386,7 @@ if __name__ == '__main__':
 
     umap_configs = [
         {'n_neighbors': 15, 'min_dist': 0.1, 'n_components': 3},
-        {'n_neighbors': 10, 'min_dist': 0.05, 'n_components': 3}
+        {'n_neighbors': 100, 'min_dist': 0.05, 'n_components': 3}
     ]
 
     pca_configs = [
@@ -347,8 +415,10 @@ if __name__ == '__main__':
     else:
         raise ValueError("No valid numeric spike times found in the data.")
 
-    bin_sizes = [0.2, 0.5]
-    smoothing_lengths = [1, 1.5, 2, 2.5]
+    bin_sizes = [0.01, 0.015, 0.02,0.025,0.03,0.035,0.04,0.045, 0.05]
+    smoothing_lengths = [0.03, 0.05, 0.075 , 0.1]
+    # bin_sizes = [0.5]
+    # smoothing_lengths = [2]
 
     # Run selected methods with their configurations
     all_results, bin_edges_dict = run_in_parallel(spike_times_list, duration, bin_sizes, smoothing_lengths, selected_methods)
@@ -373,13 +443,17 @@ if __name__ == '__main__':
 
             if result_dict:
                 # Plot all the results for this configuration
-                plot_results_by_configuration(
+                plot_grid_results(
                     result_dict,
+                    bin_sizes,
+                    smoothing_lengths,
                     title_prefix=f'{method} Config {config_index + 1}',
                     event_times=t_0_times,
                     bin_edges_dict=bin_edges_dict,
                     display=display,
-                    graph=graph  # Pass the graph parameter
+                    graph=graph,  # Pass the graph parameter
+                    max_plots_per_figure=max_plots_per_figure,  # Pass the max plots per figure
+                    event_mean=event_mean  # Control mean trajectory plotting
                 )
 
                 # For PCA, also plot the variance explained
