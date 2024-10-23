@@ -378,12 +378,12 @@ if __name__ == '__main__':
     max_plots_per_figure = 9  # Set the maximum number of plots per figure
     event_mean = 'yes'   # Choose between 'yes' or 'no'
     unit_selection = 'unit2' # Choisir entre 'both', 'unit1', ou 'unit2'
-    methods_to_run = ['UMAP']  # You can modify this to select one, two, or all methods ('PCA', 'UMAP', 't-SNE').
+    methods_to_run = ['t-SNE']  # You can modify this to select one, two, or all methods ('PCA', 'UMAP', 't-SNE').
     
     # Define multiple t-SNE, PCA, and UMAP configurations
     tsne_configs = [
-        {'perplexity': 30, 'learning_rate': 200, 'n_iter': 1000, 'early_exaggeration': 12, 'metric': 'euclidean'},
-        {'perplexity': 10, 'learning_rate': 500, 'n_iter': 1500, 'early_exaggeration': 15, 'metric': 'cosine'}
+        {'n_components': 3, 'perplexity': 30, 'learning_rate': 200, 'n_iter': 1000, 'early_exaggeration': 12, 'metric': 'euclidean'},
+        {'n_components': 3, 'perplexity': 10, 'learning_rate': 500, 'n_iter': 1500, 'early_exaggeration': 15, 'metric': 'cosine'}
     ]
 
     umap_configs = [
