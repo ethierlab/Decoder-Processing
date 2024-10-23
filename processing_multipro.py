@@ -322,10 +322,12 @@ def plot_grid_results(results, bin_sizes, smoothing_lengths, title_prefix, event
 
             if graph == 'single':
                 fig.suptitle(f'{title_prefix} 3D Projection', fontsize=16)
+                plt.savefig( f'{title_prefix} 3D Projection', dpi=700)
                 plt.show()
 
         if graph == 'group':
             fig.suptitle(f'{title_prefix} 3D Projections - Figure {fig_num + 1} of {num_figures}', fontsize=16)
+            plt.savefig( f'{title_prefix} 3D Projections - Figure {fig_num + 1}', dpi=700)
             plt.show()
 
 
