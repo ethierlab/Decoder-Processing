@@ -280,34 +280,34 @@ def plot_grid_results(results,bin_sizes,smoothing_lengths,title_prefix,event_tim
                         if dimension == 3:
                             ax.scatter(
                                 result[pre_mask, 0], result[pre_mask, 1], result[pre_mask, 2],
-                                s=10, color='red', alpha=0.5, label='1s Before', zorder=2
+                                s=10, color='black', alpha=0.5, label='1s Before', zorder=2
                             )
                         else:
                             ax.scatter(
                                 result[pre_mask, 0], result[pre_mask, 1],
-                                s=10, color='red', alpha=0.5, label='1s Before', zorder=2
+                                s=10, color='black', alpha=0.5, label='1s Before', zorder=2
                             )
                     if np.any(during_mask):
                         if dimension == 3:
                             ax.scatter(
                                 result[during_mask, 0], result[during_mask, 1], result[during_mask, 2],
-                                s=10, color='purple', alpha=0.5, label='1s During', zorder=2
+                                s=10, color='red', alpha=0.5, label='1s During', zorder=2
                             )
                         else:
                             ax.scatter(
                                 result[during_mask, 0], result[during_mask, 1],
-                                s=10, color='purple', alpha=0.5, label='1s During', zorder=2
+                                s=10, color='red', alpha=0.5, label='1s During', zorder=2
                             )
                     if np.any(post_mask):
                         if dimension == 3:
                             ax.scatter(
                                 result[post_mask, 0], result[post_mask, 1], result[post_mask, 2],
-                                s=10, color='green', alpha=0.5, label='1s After', zorder=2
+                                s=10, color='orange', alpha=0.5, label='1s After', zorder=2
                             )
                         else:
                             ax.scatter(
                                 result[post_mask, 0], result[post_mask, 1],
-                                s=10, color='green', alpha=0.5, label='1s After', zorder=2
+                                s=10, color='orange', alpha=0.5, label='1s After', zorder=2
                             )
                     if event_mean == 'yes':
                         rel_time_bins = np.arange(-pre_stim, post_stim + bin_size, bin_size)
@@ -332,7 +332,7 @@ def plot_grid_results(results,bin_sizes,smoothing_lengths,title_prefix,event_tim
                                     mean_trajectory[valid_bins, 0],
                                     mean_trajectory[valid_bins, 1],
                                     mean_trajectory[valid_bins, 2],
-                                    color='yellow', linewidth=4, marker='o',
+                                    color='yellow', linewidth=4,
                                     markersize=6, label='Mean Trajectory', zorder=5
                                 )
                             else:
