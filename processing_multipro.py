@@ -332,14 +332,14 @@ def plot_grid_results(results,bin_sizes,smoothing_lengths,title_prefix,event_tim
                                     mean_trajectory[valid_bins, 0],
                                     mean_trajectory[valid_bins, 1],
                                     mean_trajectory[valid_bins, 2],
-                                    color='yellow', linewidth=4,
-                                    markersize=6, label='Mean Trajectory', zorder=5
+                                    color='yellow', linewidth=2,
+                                     label='Mean Trajectory', zorder=5
                                 )
                             else:
                                 ax.plot(
                                     mean_trajectory[valid_bins, 0],
                                     mean_trajectory[valid_bins, 1],
-                                    color='yellow', linewidth=4, marker='o',
+                                    color='yellow', linewidth=2,
                                     markersize=6, label='Mean Trajectory', zorder=5
                                 )
                 if graph == 'single':
@@ -362,12 +362,14 @@ def plot_grid_results(results,bin_sizes,smoothing_lengths,title_prefix,event_tim
                 ax.set_zlabel('Component 3', fontsize=8)
             if graph == 'single':
                 fig.suptitle(f'{title_prefix} {dimension}D Projection', fontsize=16)
+                plt.savefig(f'{title_prefix} {dimension}D Projection', dpi=700)
                 plt.show()
         if graph == 'group':
             for ax in axes[num_subplots:]:
                 ax.set_visible(False)
             fig.suptitle(f'{title_prefix} {dimension}D Projections - Figure {fig_num + 1} of {num_figures}', fontsize=16, y=0.98)
             plt.tight_layout(rect=[0, 0, 1, 0.96])
+            plt.savefig(f'{title_prefix} {dimension}D Projections - Figure {fig_num + 1}', dpi=700)
             plt.show()
 
 
@@ -379,6 +381,14 @@ def plot_variance_explained(explained_variance_dict, bin_sizes, smoothing_length
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 4 * n_rows))
     plt.subplots_adjust(hspace=0.4, wspace=0.4)
 
+    # Ensure 'axes' is always a 2D array
+    if n_rows == 1 and n_cols == 1:
+        axes = np.array([[axes]])
+    elif n_rows == 1:
+        axes = np.array([axes])
+    elif n_cols == 1:
+        axes = np.array([axes]).T
+
     for i, bin_size in enumerate(bin_sizes):
         for j, smoothing_length in enumerate(smoothing_lengths):
             explained_variance = explained_variance_dict.get((bin_size, smoothing_length))
@@ -386,16 +396,19 @@ def plot_variance_explained(explained_variance_dict, bin_sizes, smoothing_length
             if explained_variance is not None:
                 components = np.arange(1, len(explained_variance) + 1)
                 cumulative_variance = np.cumsum(explained_variance) * 100
-                ax.bar(components, explained_variance * 100)
-                ax.plot(components, cumulative_variance, marker='o', color='red')
+                ax.bar(components, explained_variance * 100, alpha=0.7, label='Individual Variance')
+                ax.plot(components, cumulative_variance, marker='o', color='red', label='Cumulative Variance')
                 ax.set_xlabel('Principal Component')
                 ax.set_ylabel('Variance Explained (%)')
                 ax.set_ylim(0, 100)
                 ax.set_title(f"Bin: {bin_size}s, Smooth: {smoothing_length}s")
+                ax.legend()
             else:
                 ax.text(0.5, 0.5, 'No data', horizontalalignment='center', verticalalignment='center')
 
     fig.suptitle('PCA Variance Explained', fontsize=16)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.savefig ('PCA Variance Explained', dpi=700)
     plt.show()
 
 # Main script
@@ -414,13 +427,13 @@ if __name__ == '__main__':
     tdt_signals = load_data(tdt_file)
     t_0_times = tdt_signals['Event Time']
 
-    display = 'events'  # Choisir entre 'all', 'events', ou 'projection'
+    display = 'events'  # Choose between 'all', 'events', or 'projection'
     graph = 'group'  # Choose between 'single' or 'group'
     max_plots_per_figure = 9  # Set the maximum number of plots per figure
-    event_mean = 'yes'   # Choose between 'yes' or 'no'à
-    dimension = 2  # Choose between 2 or 3
-    unit_selection = 'unit2' # Choisir entre 'both', 'unit1', ou 'unit2'
-    methods_to_run = ['PCA']  # You can modify this to select one, two, or all methods ('PCA', 'UMAP', 't-SNE').
+    event_mean = 'yes'   # Choose between 'yes' or 'no'
+    dimension = 3  # Choose between 2 or 3
+    unit_selection = 'unit2' # Choose between  'both', 'unit1', or 'unit2'
+    methods_to_run = ['PCA', 't-SNE', 'UMAP']  # You can modify this to select one, two, or all methods ('PCA', 'UMAP', 't-SNE').
     
     # Define multiple t-SNE, PCA, and UMAP configurations
     tsne_configs = [
@@ -496,9 +509,9 @@ if __name__ == '__main__':
                     bin_edges_dict=bin_edges_dict,
                     dimension=dimension,
                     display=display,
-                    graph=graph,  # Pass the graph parameter
-                    max_plots_per_figure=max_plots_per_figure,  # Pass the max plots per figure
-                    event_mean=event_mean  # Control mean trajectory plotting
+                    graph=graph,
+                    max_plots_per_figure=max_plots_per_figure,
+                    event_mean=event_mean
                 )
 
                 # For PCA, also plot the variance explained

@@ -155,13 +155,13 @@ def project_and_visualize(data, method_name, event_times, bin_size, window_start
         # Visualize the projection of the first 3 components for this event
         plt.figure(figsize=(10, 7))
         ax = plt.axes(projection='3d')
-        ax.scatter(interpolated_data[:, 0], interpolated_data[:, 1], interpolated_data[:, 2])
+        ax.plot(interpolated_data[:, 0], interpolated_data[:, 1], interpolated_data[:, 2])
 
         # Add markers for specific times (-1s, 0s, +2s)
         time_markers = {
             -1.0: 'red',
             0.0: 'green',
-            2.0: 'blue'
+            2.0: 'black'
         }
         for t_mark, color in time_markers.items():
             idx_t = np.where(np.isclose(common_times, t_mark, atol=1e-6))[0]
@@ -211,8 +211,8 @@ if __name__ == "__main__":
     else:
         raise ValueError("No spike times found in the data.")
 
-    bin_size = 0.01
-    smoothing_length = 0.02
+    bin_size = 0.005
+    smoothing_length = 0.05
     sigma = (smoothing_length / bin_size) /2
 
     # Use multiprocessing to process each unit in parallel
@@ -237,21 +237,21 @@ if __name__ == "__main__":
     # Visualize variance explained by PCA
     # plot_variance_explained_single(explained_variance)
 
-    # Apply UMAP
-    umap_result = apply_umap(all_smoothed_data_T)
+    # # Apply UMAP
+    # umap_result = apply_umap(all_smoothed_data_T)
 
-    # Apply t-SNE
-    tsne_result = apply_tsne(all_smoothed_data_T)
+    # # Apply t-SNE
+    # tsne_result = apply_tsne(all_smoothed_data_T)
 
     # Project and visualize PCA, UMAP, and t-SNE
     pca_extracted = project_and_visualize(pca_result, 'PCA', t_0_times, bin_size, window_start=-1.0, window_end=2.0, trial_selection=trial_selection)
-    umap_extracted = project_and_visualize(umap_result, 'UMAP', t_0_times, bin_size, window_start=-1.0, window_end=2.0, trial_selection=trial_selection)
-    tsne_extracted = project_and_visualize(tsne_result, 't-SNE', t_0_times, bin_size, window_start=-1.0, window_end=2.0, trial_selection=trial_selection)
+    # umap_extracted = project_and_visualize(umap_result, 'UMAP', t_0_times, bin_size, window_start=-1.0, window_end=2.0, trial_selection=trial_selection)
+    # tsne_extracted = project_and_visualize(tsne_result, 't-SNE', t_0_times, bin_size, window_start=-1.0, window_end=2.0, trial_selection=trial_selection)
 
     # Average across all trials for PCA, UMAP, and t-SNE
     pca_average = average_across_trials(pca_extracted)
-    umap_average = average_across_trials(umap_extracted)
-    tsne_average = average_across_trials(tsne_extracted)
+    # umap_average = average_across_trials(umap_extracted)
+    # tsne_average = average_across_trials(tsne_extracted)
 
     # Visualize the average for PCA, UMAP, and t-SNE
     for method_name, average_data in zip(['PCA', 'UMAP', 't-SNE'], [pca_average, umap_average, tsne_average]):
