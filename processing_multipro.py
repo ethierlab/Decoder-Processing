@@ -48,7 +48,7 @@ def bin_spike_times(spike_times_list, bin_edges):
     for i, neuron_spike_times in enumerate(spike_times_list):
         if len(neuron_spike_times) > 0:
             counts, _ = np.histogram(neuron_spike_times, bins=bin_edges)
-            spike_counts[i, :] = counts
+            spike_counts[i, :] = counts.astype(float)
         else:
             spike_counts[i, :] = 0
 
