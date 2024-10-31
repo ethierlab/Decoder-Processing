@@ -36,6 +36,7 @@ def bin_and_smooth_spike_times(spike_times, bin_size=50, sigma=None):
     # Bin the spike times
     binned_counts, bin_edges = np.histogram(spike_times, bins=num_bins, range=(0, max_time))
     
+    binned_counts = binned_counts.astype(float)
     # Apply Gaussian smoothing if sigma is provided
     if sigma is not None:
         binned_counts = gaussian_filter1d(binned_counts, sigma=sigma)
