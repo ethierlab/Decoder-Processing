@@ -4,13 +4,14 @@ import torch
 import multiprocessing
 import math
 import matplotlib.pyplot as plt
-from tqdm import tqdm
+import seaborn as sns
 from mpl_toolkits.mplot3d import Axes3D
 from itertools import product
 from scipy.ndimage import gaussian_filter1d
 from sklearn.manifold import TSNE
 from umap import UMAP
-
+from matplotlib.patches import Patch
+import matplotlib.cm as cm
 
 # Function to load the pkl file
 def load_data(pkl_file):
@@ -200,176 +201,246 @@ def run_in_parallel(spike_times_list, duration, bin_sizes, smoothing_lengths, me
     # Convert manager dict to a regular dict
     return dict(results_dict), bin_edges_dict
 
-# Function to plot the results
-import numpy as np
-import matplotlib.pyplot as plt
-from itertools import product
-import math
 
-def plot_grid_results(results,bin_sizes,smoothing_lengths,title_prefix,event_times,bin_edges_dict,dimension=3,display='all',graph='group',max_plots_per_figure=9,event_mean='yes'):
-    combinations = list(product(bin_sizes, smoothing_lengths))
-    num_plots = len(combinations)
-    num_figures = math.ceil(num_plots / max_plots_per_figure)
-    chunks = [combinations[i:i + max_plots_per_figure] for i in range(0, num_plots, max_plots_per_figure)]
+def plot_density(ax, result, x_pc, y_pc, bin_times, event_times, display, cmap='Blues', label='Overall Projection', alpha=0.8):
+    cmap_obj = cm.get_cmap(cmap)
+    color = cmap_obj(0.6)  # Choose a middle value to get a good representative color
+
+    # Check if the result array is empty or if the selected PC indices are invalid
+    if result is None or len(result) == 0:
+        print("Warning: No data found for plotting.")
+        return
+
+    # Plot the KDE for the entire data set if required
+    if display in ['all', 'projection']:
+        if np.all(np.isnan(result[:, x_pc])) or np.all(np.isnan(result[:, y_pc])):
+            print("Warning: Data for KDE is NaN.")
+        else:
+            sns.kdeplot(
+                x=result[:, x_pc],
+                y=result[:, y_pc],
+                ax=ax,
+                color=color,
+                alpha=alpha,
+                linewidths=1.5,
+                label=label,
+                levels=20,    # Reduced number of contour levels for better efficiency
+                bw_adjust=1.5
+            )
+
+    # Plot the KDE for event-specific timelines if requested
+    if display in ['all', 'events']:
+        pre_stim, post_stim = 1, 2  # Times before and after event
+
+        # Pre-event density
+        pre_mask = np.any([(bin_times >= t_0 - pre_stim) & (bin_times < t_0) for t_0 in event_times], axis=0)
+        if np.any(pre_mask):
+            sns.kdeplot(
+                x=result[pre_mask, x_pc],
+                y=result[pre_mask, y_pc],
+                ax=ax,
+                color='green',
+                alpha=alpha,
+                linewidths=1.5,
+                label='1s Before',
+                levels=20,    # Reduced number of contour levels for better efficiency
+                bw_adjust=1.5
+            )
+
+        # During-event density
+        during_mask = np.any([(bin_times >= t_0) & (bin_times < t_0 + 1) for t_0 in event_times], axis=0)
+        if np.any(during_mask):
+            sns.kdeplot(
+                x=result[during_mask, x_pc],
+                y=result[during_mask, y_pc],
+                ax=ax,
+                color='red',
+                alpha=alpha,
+                linewidths=1.5,
+                label='1s During',
+                levels=20,    # Reduced number of contour levels for better efficiency
+                bw_adjust=1.5
+            )
+
+        # Post-event density
+        post_mask = np.any([(bin_times >= t_0 + 1) & (bin_times < t_0 + post_stim) for t_0 in event_times], axis=0)
+        if np.any(post_mask):
+            sns.kdeplot(
+                x=result[post_mask, x_pc],
+                y=result[post_mask, y_pc],
+                ax=ax,
+                color='orange',
+                alpha=alpha,
+                linewidths=1.5,
+                label='1s After',
+                levels=20,    # Reduced number of contour levels for better efficiency
+                bw_adjust=1.5
+            )
+
+# Function to handle scatter plotting in 2D
+def plot_2d_scatter(ax, result, x_pc, y_pc, mask=None, color='blue', label='Overall Projection', alpha=0.3, zorder=1):
+    ax.scatter(
+        result[mask, x_pc] if mask is not None else result[:, x_pc], 
+        result[mask, y_pc] if mask is not None else result[:, y_pc], 
+        s=5 if mask is None else 10, 
+        color=color, 
+        alpha=alpha, 
+        label=label, 
+        zorder=zorder
+    )
+
+# Function to handle scatter plotting in 3D
+def plot_3d_scatter(ax, result, bin_times, event_times, display):
+    # Plot the 3D scatter plot for overall projection
+    if display in ['all', 'projection']:
+        ax.scatter(result[:, 0], result[:, 1], result[:, 2], s=5, alpha=0.3, label='Overall Projection', zorder=1)
     
+    if display in ['all', 'events']:
+        pre_stim, post_stim = 1, 2
+
+        # Pre-event mask and scatter plot for 3D
+        pre_mask = np.any([(bin_times >= t_0 - pre_stim) & (bin_times < t_0) for t_0 in event_times], axis=0)
+        if np.any(pre_mask):
+            ax.scatter(result[pre_mask, 0], result[pre_mask, 1], result[pre_mask, 2], s=10, color='green', alpha=0.5, label='1s Before', zorder=2)
+
+        # During-event mask and scatter plot for 3D
+        during_mask = np.any([(bin_times >= t_0) & (bin_times < t_0 + 1) for t_0 in event_times], axis=0)
+        if np.any(during_mask):
+            ax.scatter(result[during_mask, 0], result[during_mask, 1], result[during_mask, 2], s=10, color='red', alpha=0.5, label='1s During', zorder=2)
+
+        # Post-event mask and scatter plot for 3D
+        post_mask = np.any([(bin_times >= t_0 + 1) & (bin_times < t_0 + post_stim) for t_0 in event_times], axis=0)
+        if np.any(post_mask):
+            ax.scatter(result[post_mask, 0], result[post_mask, 1], result[post_mask, 2], s=10, color='orange', alpha=0.5, label='1s After', zorder=2)
+
+# Main plotting function
+def plot_grid_results(results, bin_sizes, smoothing_lengths, title_prefix, event_times, bin_edges_dict, dimension=3, display='all', graph='group', max_plots_per_figure=9, event_mean='yes', plot_type='dots', plot_combinations=False):
+    combinations_list = list(product(bin_sizes, smoothing_lengths))
+    num_plots = len(combinations_list)
+
+    # Always plot all combinations in density mode, calculate PCA in 3D
+    if plot_type == 'density':
+        pc_combinations = [(0, 1), (1, 2), (0, 2)]  # Always use 2D for density plots but calculate PCA in 3D
+    else:
+        # Use standard dimension logic for scatter plots
+        if dimension == 2:
+            pc_combinations = [(0, 1)]
+        elif dimension == 3:
+            pc_combinations = [(0, 1), (1, 2), (0, 2)] if plot_combinations else [(0, 1)]
+
+    # Handle density plots independently
+    if plot_type == 'density':
+        # Loop over each combination of bin_size and smoothing_length
+        for idx, (bin_size, smoothing_length) in enumerate(combinations_list):
+            result = results.get((bin_size, smoothing_length))
+            bin_edges = bin_edges_dict.get(bin_size)
+            bin_times = (bin_edges[:-1] + bin_edges[1:]) / 2
+            
+            if result is None or bin_edges is None:
+                continue
+
+            # Loop over each PC combination
+            for x_pc, y_pc in pc_combinations:
+                # Create a new figure for each combination in density mode
+                fig, ax = plt.subplots(figsize=(8, 6))
+
+                # Plot density for each PC combination in 2D
+                plot_density(ax, result, x_pc, y_pc, bin_times, event_times, display)
+
+                # Set title and labels for 2D density plot
+                ax.set_title(f"Density Plot\nBin: {bin_size}s, Smooth: {smoothing_length}s\nPC{x_pc + 1} vs PC{y_pc + 1}", fontsize=12)
+                ax.set_xlabel(f'PC{x_pc + 1}', fontsize=10)
+                ax.set_ylabel(f'PC{y_pc + 1}', fontsize=10)
+
+                # Show each density plot immediately
+                plt.tight_layout()
+                plt.savefig(f'{title_prefix} - {dimension}D Projections - Density Plot of Component {x_pc+1} and Component {y_pc+1}', dpi=700)
+                plt.show()
+
+        return  # Skip the rest of the function for density plots
+
+    # Original logic for dots scatter plots (group/single)
+    num_figures = math.ceil((num_plots * len(pc_combinations)) / max_plots_per_figure)
+    chunks = [combinations_list[i:i + max_plots_per_figure // len(pc_combinations)] for i in range(0, num_plots, max_plots_per_figure // len(pc_combinations))]
+
+    # Loop over chunks, each chunk corresponds to one figure to display
     for fig_num, chunk in enumerate(chunks):
-        num_subplots = len(chunk)
+        num_subplots = len(chunk) * len(pc_combinations)
+
+        # Create a new figure for each chunk of plots
+        fig = plt.figure(figsize=(10, 8))
+
         if graph == 'group':
             num_cols = math.ceil(math.sqrt(num_subplots))
             num_rows = math.ceil(num_subplots / num_cols)
-            fig_width = 5 * num_cols
-            fig_height = 4 * num_rows
-            if dimension == 3:
-                fig, axes = plt.subplots(
-                    num_rows, num_cols,
-                    figsize=(fig_width, fig_height),
-                    subplot_kw={'projection': '3d'}
-                )
-            else:
-                fig, axes = plt.subplots(
-                    num_rows, num_cols,
-                    figsize=(fig_width, fig_height)
-                )
+            fig, axes = plt.subplots(num_rows, num_cols, figsize=(5 * num_cols, 4 * num_rows))
             axes = np.array(axes).flatten()
             plt.subplots_adjust(hspace=0.6, wspace=0.5)
         elif graph == 'single':
-            pass  # Handle single plots individually
-        
+            # Only create a 3D axis if dimension == 3 and scatter plot
+            if dimension == 3 and plot_type == 'dots':
+                ax = fig.add_subplot(111, projection='3d')
+            else:
+                ax = fig.add_subplot(111)
+
+        plot_idx = 0
         for idx, (bin_size, smoothing_length) in enumerate(chunk):
             result = results.get((bin_size, smoothing_length))
             bin_edges = bin_edges_dict.get(bin_size)
             bin_times = (bin_edges[:-1] + bin_edges[1:]) / 2
-            if graph == 'group':
-                ax = axes[idx]
-            elif graph == 'single':
-                if dimension == 3:
-                    fig = plt.figure(figsize=(8, 6))
-                    ax = fig.add_subplot(111, projection='3d')
-                else:
-                    fig = plt.figure(figsize=(8, 6))
-                    ax = fig.add_subplot(111)
             
-            if result is not None and bin_edges is not None and result.shape[1] >= dimension:
-                if display in ['all', 'projection']:
-                    if dimension == 3:
-                        ax.scatter(
-                            result[:, 0], result[:, 1], result[:, 2],
-                            s=5, alpha=0.3, label='Overall Projection', zorder=1
-                        )
-                    else:
-                        ax.scatter(
-                            result[:, 0], result[:, 1],
-                            s=5, alpha=0.3, label='Overall Projection', zorder=1
-                        )
-                if display in ['all', 'events']:
-                    pre_stim = 1  # 1 second before t_0
-                    post_stim = 2  # 2 seconds after t_0
-                    pre_mask = np.any(
-                        [(bin_times >= t_0 - pre_stim) & (bin_times < t_0) for t_0 in event_times],
-                        axis=0
-                    )
-                    during_mask = np.any(
-                        [(bin_times >= t_0) & (bin_times < t_0 + 1) for t_0 in event_times],
-                        axis=0
-                    )
-                    post_mask = np.any(
-                        [(bin_times >= t_0 + 1) & (bin_times < t_0 + post_stim) for t_0 in event_times],
-                        axis=0
-                    )
-                    if np.any(pre_mask):
-                        if dimension == 3:
-                            ax.scatter(
-                                result[pre_mask, 0], result[pre_mask, 1], result[pre_mask, 2],
-                                s=10, color='black', alpha=0.5, label='1s Before', zorder=2
-                            )
+            if result is None or bin_edges is None:
+                continue
+
+            # Loop over each PC combination and assign a separate subplot to each
+            for x_pc, y_pc in pc_combinations:
+                if graph == 'group':
+                    if plot_idx >= len(axes):
+                        print(f"Warning: Plot index {plot_idx} exceeds available axes. Skipping remaining plots.")
+                        break
+                    ax = axes[plot_idx]
+                elif graph == 'single':
+                    if plot_idx > 0:
+                        # Create a new figure for every new combination in single mode
+                        fig = plt.figure(figsize=(8, 6))
+                        if dimension == 3 and plot_type == 'dots':
+                            ax = fig.add_subplot(111, projection='3d')
                         else:
-                            ax.scatter(
-                                result[pre_mask, 0], result[pre_mask, 1],
-                                s=10, color='black', alpha=0.5, label='1s Before', zorder=2
-                            )
-                    if np.any(during_mask):
-                        if dimension == 3:
-                            ax.scatter(
-                                result[during_mask, 0], result[during_mask, 1], result[during_mask, 2],
-                                s=10, color='red', alpha=0.5, label='1s During', zorder=2
-                            )
-                        else:
-                            ax.scatter(
-                                result[during_mask, 0], result[during_mask, 1],
-                                s=10, color='red', alpha=0.5, label='1s During', zorder=2
-                            )
-                    if np.any(post_mask):
-                        if dimension == 3:
-                            ax.scatter(
-                                result[post_mask, 0], result[post_mask, 1], result[post_mask, 2],
-                                s=10, color='orange', alpha=0.5, label='1s After', zorder=2
-                            )
-                        else:
-                            ax.scatter(
-                                result[post_mask, 0], result[post_mask, 1],
-                                s=10, color='orange', alpha=0.5, label='1s After', zorder=2
-                            )
-                    if event_mean == 'yes':
-                        rel_time_bins = np.arange(-pre_stim, post_stim + bin_size, bin_size)
-                        mean_trajectory = np.zeros((len(rel_time_bins) - 1, dimension))
-                        count_trajectory = np.zeros(len(rel_time_bins) - 1)
-                        for t_0 in event_times:
-                            rel_times = bin_times - t_0
-                            mask = (rel_times >= -pre_stim) & (rel_times <= post_stim)
-                            rel_times_window = rel_times[mask]
-                            result_window = result[mask]
-                            bin_indices = np.digitize(rel_times_window, rel_time_bins) - 1
-                            for i in range(len(rel_time_bins) - 1):
-                                bin_mask = bin_indices == i
-                                if np.any(bin_mask):
-                                    mean_trajectory[i] += np.sum(result_window[bin_mask], axis=0)
-                                    count_trajectory[i] += np.sum(bin_mask)
-                        valid_bins = count_trajectory > 0
-                        mean_trajectory[valid_bins] /= count_trajectory[valid_bins, np.newaxis]
-                        if np.any(valid_bins):
-                            if dimension == 3:
-                                ax.plot(
-                                    mean_trajectory[valid_bins, 0],
-                                    mean_trajectory[valid_bins, 1],
-                                    mean_trajectory[valid_bins, 2],
-                                    color='yellow', linewidth=2,
-                                     label='Mean Trajectory', zorder=5
-                                )
-                            else:
-                                ax.plot(
-                                    mean_trajectory[valid_bins, 0],
-                                    mean_trajectory[valid_bins, 1],
-                                    color='yellow', linewidth=2,
-                                    markersize=6, label='Mean Trajectory', zorder=5
-                                )
-                if graph == 'single':
-                    ax.legend(fontsize=8)
-            else:
-                if dimension == 3:
-                    ax.text(
-                        0.5, 0.5, 0.5, 'Not enough components',
-                        horizontalalignment='center', verticalalignment='center', fontsize=10
-                    )
-                else:
-                    ax.text(
-                        0.5, 0.5, 'Not enough components',
-                        horizontalalignment='center', verticalalignment='center', fontsize=10
-                    )
-            ax.set_title(f"Bin: {bin_size}s\nSmooth: {smoothing_length}s", fontsize=10)
-            ax.set_xlabel('Component 1', fontsize=8)
-            ax.set_ylabel('Component 2', fontsize=8)
-            if dimension == 3:
-                ax.set_zlabel('Component 3', fontsize=8)
-            if graph == 'single':
-                fig.suptitle(f'{title_prefix} {dimension}D Projection', fontsize=16)
-                plt.savefig(f'{title_prefix} {dimension}D Projection', dpi=700)
-                plt.show()
+                            ax = fig.add_subplot(111)
+
+                # Handle scatter plots
+                if plot_type == 'dots':
+                    # Plot based on selected dimension
+                    if dimension == 2:
+                        plot_2d_scatter(ax, result, x_pc, y_pc)
+                    elif dimension == 3:
+                        # Ensure ax is 3D
+                        if not hasattr(ax, 'get_proj'):
+                            ax = fig.add_subplot(ax.get_subplotspec().rowspan.start, ax.get_subplotspec().colspan.start, projection='3d')
+
+                        plot_3d_scatter(ax, result, bin_times, event_times, display)
+
+                # Set title and labels for scatter plots
+                if dimension == 2:
+                    ax.set_title(f"Scatter Plot\nBin: {bin_size}s\nSmooth: {smoothing_length}s\nPC{x_pc + 1} vs PC{y_pc + 1}", fontsize=10)
+                    ax.set_xlabel(f'PC{x_pc + 1}', fontsize=8)
+                    ax.set_ylabel(f'PC{y_pc + 1}', fontsize=8)
+
+                plot_idx += 1
+
+        # Hide empty subplots in 'group' mode
         if graph == 'group':
             for ax in axes[num_subplots:]:
                 ax.set_visible(False)
-            fig.suptitle(f'{title_prefix} {dimension}D Projections - Figure {fig_num + 1} of {num_figures}', fontsize=16, y=0.98)
+            # Show each group of plots immediately after generating them
+            fig.suptitle(f'{title_prefix} - {dimension}D Projections - Figure {fig_num + 1} of {num_figures}', fontsize=16, y=0.98)
             plt.tight_layout(rect=[0, 0, 1, 0.96])
-            plt.savefig(f'{title_prefix} {dimension}D Projections - Figure {fig_num + 1}', dpi=700)
+            plt.show()
+
+        elif graph == 'single':
+            # Show single plot immediately after generating
+            fig.suptitle(f'{title_prefix} - {dimension}D Projection', fontsize=16)
+            plt.tight_layout()
             plt.show()
 
 
@@ -427,14 +498,15 @@ if __name__ == '__main__':
     tdt_signals = load_data(tdt_file)
     t_0_times = tdt_signals['Event Time']
 
-    display = 'events'  # Choose between 'all', 'events', or 'projection'
-    graph = 'group'  # Choose between 'single' or 'group'
+    display = 'all'  # Choose between 'all', 'events', or 'projection'
+    graph = 'single'  # Choose between 'single' or 'group'
     max_plots_per_figure = 9  # Set the maximum number of plots per figure
     event_mean = 'yes'   # Choose between 'yes' or 'no'
     dimension = 3  # Choose between 2 or 3
     unit_selection = 'unit2' # Choose between  'both', 'unit1', or 'unit2'
-    methods_to_run = ['PCA', 't-SNE', 'UMAP']  # You can modify this to select one, two, or all methods ('PCA', 'UMAP', 't-SNE').
-    
+    # methods_to_run = ['PCA', 't-SNE', 'UMAP'] # You can modify this to select one, two, or all methods ('PCA', 'UMAP', 't-SNE').
+    methods_to_run = ['PCA']
+    plot_type = 'dots'  # Options: 'dots' or 'density'
     # Define multiple t-SNE, PCA, and UMAP configurations
     tsne_configs = [
         {'n_components': 3, 'perplexity': 30, 'learning_rate': 200, 'n_iter': 1000, 'early_exaggeration': 12, 'metric': 'euclidean'},
@@ -449,7 +521,7 @@ if __name__ == '__main__':
     pca_configs = [
         {'n_components': 3}
     ]
-    
+
     # Dynamically select configurations based on the methods the user wants to run
     selected_methods = {}
     if 'PCA' in methods_to_run:
@@ -511,7 +583,8 @@ if __name__ == '__main__':
                     display=display,
                     graph=graph,
                     max_plots_per_figure=max_plots_per_figure,
-                    event_mean=event_mean
+                    event_mean=event_mean,
+                    plot_type=plot_type
                 )
 
                 # For PCA, also plot the variance explained
