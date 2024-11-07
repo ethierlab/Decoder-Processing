@@ -5,13 +5,16 @@ import multiprocessing
 import math
 import matplotlib.pyplot as plt
 import seaborn as sns
+import matplotlib
+import matplotlib.gridspec as gridspec
 from mpl_toolkits.mplot3d import Axes3D
 from itertools import product
 from scipy.ndimage import gaussian_filter1d
 from sklearn.manifold import TSNE
 from umap import UMAP
 from matplotlib.patches import Patch
-import matplotlib.cm as cm
+from matplotlib.colors import ListedColormap
+from scipy import stats
 
 # Function to load the pkl file
 def load_data(pkl_file):
@@ -202,116 +205,283 @@ def run_in_parallel(spike_times_list, duration, bin_sizes, smoothing_lengths, me
     return dict(results_dict), bin_edges_dict
 
 
-def plot_density(ax, result, x_pc, y_pc, bin_times, event_times, display, cmap='Blues', label='Overall Projection', alpha=0.8):
-    cmap_obj = cm.get_cmap(cmap)
-    color = cmap_obj(0.6)  # Choose a middle value to get a good representative color
+def plot_density(result, x_pc, y_pc, bin_times, event_times, display, cmap='Blues', label='Overall Projection', alpha=0.8, event_mean='yes'):
 
-    # Check if the result array is empty or if the selected PC indices are invalid
-    if result is None or len(result) == 0:
-        print("Warning: No data found for plotting.")
+    cmap_obj = matplotlib.colormaps.get_cmap(cmap)
+    color = cmap_obj(0.6)
+
+    # Validate data before plotting
+    if len(result) == 0 or np.all(np.isnan(result[:, x_pc])) or np.all(np.isnan(result[:, y_pc])):
+        print("Warning: No valid data to plot.")
         return
 
-    # Plot the KDE for the entire data set if required
-    if display in ['all', 'projection']:
-        if np.all(np.isnan(result[:, x_pc])) or np.all(np.isnan(result[:, y_pc])):
-            print("Warning: Data for KDE is NaN.")
-        else:
-            sns.kdeplot(
-                x=result[:, x_pc],
-                y=result[:, y_pc],
-                ax=ax,
-                color=color,
-                alpha=alpha,
-                linewidths=1.5,
-                label=label,
-                levels=20,    # Reduced number of contour levels for better efficiency
-                bw_adjust=1.5
-            )
+    # Set up the JointGrid
+    g = sns.JointGrid(x=[], y=[], height=8, ratio=5, marginal_ticks=True)
 
-    # Plot the KDE for event-specific timelines if requested
-    if display in ['all', 'events']:
-        pre_stim, post_stim = 1, 2  # Times before and after event
+    # # Number of levels
+    # num_levels = 8
 
-        # Pre-event density
+    # # Create a colormap with the same color repeated
+    # same_color_cmap = ListedColormap([color] * num_levels)
+    
+    # z_scores = np.abs(stats.zscore(result[:, [x_pc, y_pc]]))
+    # outlier_mask = (z_scores > 3).any(axis=1)
+    # if np.any(outlier_mask):
+    #     print(f"Removing {np.sum(outlier_mask)} outliers")
+    #     result = result[~outlier_mask]
+
+    # Plot densities based on the selected display
+    if display == 'all' or display == 'projection':
+        # Overall density
+        sns.kdeplot(
+            x=result[:, x_pc],
+            y=result[:, y_pc],
+            cmap=cmap,
+            alpha=alpha,
+            linewidths=1.5,
+            # levels=num_levels,
+            bw_adjust=1.5,
+            ax=g.ax_joint
+        )
+        sns.kdeplot(x=result[:, x_pc], ax=g.ax_marg_x, color=color, alpha=0.6, linewidth=1.5)
+        sns.kdeplot(y=result[:, y_pc], ax=g.ax_marg_y, color=color, alpha=0.6, linewidth=1.5)
+
+    if display == 'all' or display == 'events':
+        # Define colors for each period
+        period_colors = {'pre': 'green', 'during': 'red', 'post': 'orange'}
+
+        pre_stim = 1  # 1 second before t_0
+        post_stim = 2  # 2 seconds after t_0
+
+        # Create masks for event periods
         pre_mask = np.any([(bin_times >= t_0 - pre_stim) & (bin_times < t_0) for t_0 in event_times], axis=0)
-        if np.any(pre_mask):
-            sns.kdeplot(
-                x=result[pre_mask, x_pc],
-                y=result[pre_mask, y_pc],
-                ax=ax,
-                color='green',
-                alpha=alpha,
-                linewidths=1.5,
-                label='1s Before',
-                levels=20,    # Reduced number of contour levels for better efficiency
-                bw_adjust=1.5
-            )
-
-        # During-event density
         during_mask = np.any([(bin_times >= t_0) & (bin_times < t_0 + 1) for t_0 in event_times], axis=0)
-        if np.any(during_mask):
-            sns.kdeplot(
-                x=result[during_mask, x_pc],
-                y=result[during_mask, y_pc],
-                ax=ax,
-                color='red',
-                alpha=alpha,
-                linewidths=1.5,
-                label='1s During',
-                levels=20,    # Reduced number of contour levels for better efficiency
-                bw_adjust=1.5
-            )
-
-        # Post-event density
         post_mask = np.any([(bin_times >= t_0 + 1) & (bin_times < t_0 + post_stim) for t_0 in event_times], axis=0)
+
+        # Plot densities for each event period with uniform lines
+        for period, mask, color_period in zip(
+            ['1s Before', '1s During', '1s After'],
+            [pre_mask, during_mask, post_mask],
+            [period_colors['pre'], period_colors['during'], period_colors['post']]
+        ):
+            if np.any(mask):
+                # Create a colormap with the same color
+                # same_color_cmap = ListedColormap([color_period] * num_levels)
+                sns.kdeplot(
+                    x=result[mask, x_pc],
+                    y=result[mask, y_pc],
+                    cmap=cmap,
+                    alpha=alpha,
+                    linewidths=1.5,
+                    # levels=num_levels,
+                    bw_adjust=1.5,
+                    ax=g.ax_joint,
+                    label=period
+                )
+                sns.kdeplot(x=result[mask, x_pc], ax=g.ax_marg_x, color=color_period, alpha=0.5, linewidth=1.5)
+                sns.kdeplot(y=result[mask, y_pc], ax=g.ax_marg_y, color=color_period, alpha=0.5, linewidth=1.5)
+
+        # Add legend
+        handles, labels = g.ax_joint.get_legend_handles_labels()
+        if handles:
+            g.ax_joint.legend(handles=handles, labels=labels)
+
+    # Add marginal KDEs based on the selected display
+    if display == 'all' or display == 'projection':
+        sns.kdeplot(x=result[:, x_pc], ax=g.ax_marg_x, color=color, alpha=0.6, linewidth=1.5)
+        sns.kdeplot(y=result[:, y_pc], ax=g.ax_marg_y, color=color, alpha=0.6, linewidth=1.5)
+    elif display == 'events':
+        # Marginal KDEs for specific event segments
+        pre_stim = 1  # 1 second before t_0
+        post_stim = 2  # 2 seconds after t_0
+
+        pre_mask = np.any([(bin_times >= t_0 - pre_stim) & (bin_times < t_0) for t_0 in event_times], axis=0)
+        during_mask = np.any([(bin_times >= t_0) & (bin_times < t_0 + 1) for t_0 in event_times], axis=0)
+        post_mask = np.any([(bin_times >= t_0 + 1) & (bin_times < t_0 + post_stim) for t_0 in event_times], axis=0)
+
+        if np.any(pre_mask):
+            sns.kdeplot(x=result[pre_mask, x_pc], ax=g.ax_marg_x, color='green', alpha=0.5, linewidth=1.5)
+            sns.kdeplot(y=result[pre_mask, y_pc], ax=g.ax_marg_y, color='green', alpha=0.5, linewidth=1.5)
+
+        if np.any(during_mask):
+            sns.kdeplot(x=result[during_mask, x_pc], ax=g.ax_marg_x, color='red', alpha=0.5, linewidth=1.5)
+            sns.kdeplot(y=result[during_mask, y_pc], ax=g.ax_marg_y, color='red', alpha=0.5, linewidth=1.5)
+
         if np.any(post_mask):
-            sns.kdeplot(
-                x=result[post_mask, x_pc],
-                y=result[post_mask, y_pc],
-                ax=ax,
-                color='orange',
-                alpha=alpha,
-                linewidths=1.5,
-                label='1s After',
-                levels=20,    # Reduced number of contour levels for better efficiency
-                bw_adjust=1.5
-            )
+            sns.kdeplot(x=result[post_mask, x_pc], ax=g.ax_marg_x, color='orange', alpha=0.5, linewidth=1.5)
+            sns.kdeplot(y=result[post_mask, y_pc], ax=g.ax_marg_y, color='orange', alpha=0.5, linewidth=1.5)
+
+    # Plot mean trajectory if event_mean == 'yes'
+    if event_mean == 'yes':
+        pre_stim = 1  # 1 second before t_0
+        post_stim = 2  # 2 seconds after t_0
+        rel_time_bins = np.arange(-pre_stim, post_stim + bin_times[1] - bin_times[0], bin_times[1] - bin_times[0])
+        mean_trajectory = np.zeros((len(rel_time_bins) - 1, 2))
+        count_trajectory = np.zeros(len(rel_time_bins) - 1)
+
+        # Loop through each event time to compute the mean trajectory
+        for t_0 in event_times:
+            rel_times = bin_times - t_0
+            mask = (rel_times >= -pre_stim) & (rel_times <= post_stim)
+            rel_times_window = rel_times[mask]
+            result_window = result[mask]
+            bin_indices = np.digitize(rel_times_window, rel_time_bins) - 1
+            for i in range(len(rel_time_bins) - 1):
+                bin_mask = bin_indices == i
+                if np.any(bin_mask):
+                    mean_trajectory[i] += np.sum(result_window[bin_mask][:, [x_pc, y_pc]], axis=0)
+                    count_trajectory[i] += np.sum(bin_mask)
+
+        # Calculate the average for valid bins
+        valid_bins = count_trajectory > 0
+        mean_trajectory[valid_bins] /= count_trajectory[valid_bins, np.newaxis]
+
+        # Plot the mean trajectory with 'hot' color bar to represent time evolution
+        if np.any(valid_bins):
+            norm = plt.Normalize(-pre_stim, post_stim)
+            colors = matplotlib.colormaps.get_cmap('hot')(norm(rel_time_bins[:-1][valid_bins]))
+
+            for i in range(len(mean_trajectory) - 1):
+                if valid_bins[i] and valid_bins[i + 1]:
+                    g.ax_joint.plot(
+                        mean_trajectory[i:i + 2, 0],  # x coordinates
+                        mean_trajectory[i:i + 2, 1],  # y coordinates
+                        color=colors[i], linewidth=2, zorder=5
+                    )
+
+    # Set axis labels for main density plot
+    g.ax_joint.set_xlabel(f'PC{x_pc + 1}', fontsize=10)
+    g.ax_joint.set_ylabel(f'PC{y_pc + 1}', fontsize=10)
+
+    # Set titles for the plots
+    g.ax_joint.set_title(f"Density Plot with Marginals\nPC{x_pc + 1} vs PC{y_pc + 1}", fontsize=12)
+
+
+
 
 # Function to handle scatter plotting in 2D
-def plot_2d_scatter(ax, result, x_pc, y_pc, mask=None, color='blue', label='Overall Projection', alpha=0.3, zorder=1):
-    ax.scatter(
-        result[mask, x_pc] if mask is not None else result[:, x_pc], 
-        result[mask, y_pc] if mask is not None else result[:, y_pc], 
-        s=5 if mask is None else 10, 
-        color=color, 
-        alpha=alpha, 
-        label=label, 
-        zorder=zorder
-    )
+def plot_2d_scatter(ax, result, x_pc, y_pc, bin_times, event_times, display, event_mean='yes'):
+    # Plot the individual dots if specified by the display parameter
+    if display in ['all', 'projection']:
+        ax.scatter(result[:, x_pc], result[:, y_pc], s=5, alpha=0.3, label='Overall Projection', zorder=1)
+
+    # Plot event-specific colors if requested
+    if display in ['all', 'events']:
+        pre_stim = 1  # 1 second before t_0
+        post_stim = 2  # 2 seconds after t_0
+
+        pre_mask = np.any([(bin_times >= t_0 - pre_stim) & (bin_times < t_0) for t_0 in event_times], axis=0)
+        if np.any(pre_mask):
+            ax.scatter(result[pre_mask, x_pc], result[pre_mask, y_pc], s=10, color='green', alpha=0.5, label='1s Before', zorder=2)
+
+        during_mask = np.any([(bin_times >= t_0) & (bin_times < t_0 + 1) for t_0 in event_times], axis=0)
+        if np.any(during_mask):
+            ax.scatter(result[during_mask, x_pc], result[during_mask, y_pc], s=10, color='red', alpha=0.5, label='1s During', zorder=2)
+
+        post_mask = np.any([(bin_times >= t_0 + 1) & (bin_times < t_0 + post_stim) for t_0 in event_times], axis=0)
+        if np.any(post_mask):
+            ax.scatter(result[post_mask, x_pc], result[post_mask, y_pc], s=10, color='orange', alpha=0.5, label='1s After', zorder=2)
+
+    # Plot mean trajectory if event_mean == 'yes'
+    if event_mean == 'yes':
+        pre_stim = 1  # 1 second before t_0
+        post_stim = 2  # 2 seconds after t_0
+        rel_time_bins = np.arange(-pre_stim, post_stim + bin_times[1] - bin_times[0], bin_times[1] - bin_times[0])
+        mean_trajectory = np.zeros((len(rel_time_bins) - 1, 2))
+        count_trajectory = np.zeros(len(rel_time_bins) - 1)
+
+        # Loop through each event time to compute the mean trajectory
+        for t_0 in event_times:
+            rel_times = bin_times - t_0
+            mask = (rel_times >= -pre_stim) & (rel_times <= post_stim)
+            rel_times_window = rel_times[mask]
+            result_window = result[mask]
+            bin_indices = np.digitize(rel_times_window, rel_time_bins) - 1
+            for i in range(len(rel_time_bins) - 1):
+                bin_mask = bin_indices == i
+                if np.any(bin_mask):
+                    mean_trajectory[i] += np.sum(result_window[bin_mask][:, [x_pc, y_pc]], axis=0)
+                    count_trajectory[i] += np.sum(bin_mask)
+
+        # Calculate the average for valid bins
+        valid_bins = count_trajectory > 0
+        mean_trajectory[valid_bins] /= count_trajectory[valid_bins, np.newaxis]
+
+        # Plot the mean trajectory
+        if np.any(valid_bins):
+            norm = plt.Normalize(-pre_stim, post_stim)
+            colors = matplotlib.colormaps.get_cmap('hot')(norm(rel_time_bins[:-1][valid_bins]))
+
+            for i in range(len(mean_trajectory) - 1):
+                if valid_bins[i] and valid_bins[i + 1]:
+                    ax.plot(
+                        mean_trajectory[i:i + 2, 0],  # x coordinates
+                        mean_trajectory[i:i + 2, 1],  # y coordinates
+                        color=colors[i], linewidth=2, zorder=5
+                    )
 
 # Function to handle scatter plotting in 3D
-def plot_3d_scatter(ax, result, bin_times, event_times, display):
-    # Plot the 3D scatter plot for overall projection
+def plot_3d_scatter(ax, result, bin_times, event_times, display, event_mean='yes'):
+    # Plot the individual dots if specified by the display parameter
     if display in ['all', 'projection']:
         ax.scatter(result[:, 0], result[:, 1], result[:, 2], s=5, alpha=0.3, label='Overall Projection', zorder=1)
-    
-    if display in ['all', 'events']:
-        pre_stim, post_stim = 1, 2
 
-        # Pre-event mask and scatter plot for 3D
+    # Plot event-specific colors if requested
+    if display in ['all', 'events']:
+        pre_stim = 1  # 1 second before t_0
+        post_stim = 2  # 2 seconds after t_0
+
         pre_mask = np.any([(bin_times >= t_0 - pre_stim) & (bin_times < t_0) for t_0 in event_times], axis=0)
         if np.any(pre_mask):
             ax.scatter(result[pre_mask, 0], result[pre_mask, 1], result[pre_mask, 2], s=10, color='green', alpha=0.5, label='1s Before', zorder=2)
 
-        # During-event mask and scatter plot for 3D
         during_mask = np.any([(bin_times >= t_0) & (bin_times < t_0 + 1) for t_0 in event_times], axis=0)
         if np.any(during_mask):
             ax.scatter(result[during_mask, 0], result[during_mask, 1], result[during_mask, 2], s=10, color='red', alpha=0.5, label='1s During', zorder=2)
 
-        # Post-event mask and scatter plot for 3D
         post_mask = np.any([(bin_times >= t_0 + 1) & (bin_times < t_0 + post_stim) for t_0 in event_times], axis=0)
         if np.any(post_mask):
             ax.scatter(result[post_mask, 0], result[post_mask, 1], result[post_mask, 2], s=10, color='orange', alpha=0.5, label='1s After', zorder=2)
+
+    # Plot mean trajectory if event_mean == 'yes'
+    if event_mean == 'yes':
+        pre_stim = 1  # 1 second before t_0
+        post_stim = 2  # 2 seconds after t_0
+        rel_time_bins = np.arange(-pre_stim, post_stim + bin_times[1] - bin_times[0], bin_times[1] - bin_times[0])
+        mean_trajectory = np.zeros((len(rel_time_bins) - 1, 3))
+        count_trajectory = np.zeros(len(rel_time_bins) - 1)
+
+        # Loop through each event time to compute the mean trajectory
+        for t_0 in event_times:
+            rel_times = bin_times - t_0
+            mask = (rel_times >= -pre_stim) & (rel_times <= post_stim)
+            rel_times_window = rel_times[mask]
+            result_window = result[mask]
+            bin_indices = np.digitize(rel_times_window, rel_time_bins) - 1
+            for i in range(len(rel_time_bins) - 1):
+                bin_mask = bin_indices == i
+                if np.any(bin_mask):
+                    mean_trajectory[i] += np.sum(result_window[bin_mask], axis=0)
+                    count_trajectory[i] += np.sum(bin_mask)
+
+        # Calculate the average for valid bins
+        valid_bins = count_trajectory > 0
+        mean_trajectory[valid_bins] /= count_trajectory[valid_bins, np.newaxis]
+
+        # Plot the mean trajectory
+        if np.any(valid_bins):
+            norm = plt.Normalize(-pre_stim, post_stim)
+            colors = matplotlib.colormaps.get_cmap('hot')(norm(rel_time_bins[:-1][valid_bins]))
+
+            for i in range(len(mean_trajectory) - 1):
+                if valid_bins[i] and valid_bins[i + 1]:
+                    ax.plot(
+                        mean_trajectory[i:i + 2, 0],  # x coordinates
+                        mean_trajectory[i:i + 2, 1],  # y coordinates
+                        zs=mean_trajectory[i:i + 2, 2],  # z coordinates
+                        color=colors[i], linewidth=2, zorder=5
+                    )
+
 
 # Main plotting function
 def plot_grid_results(results, bin_sizes, smoothing_lengths, title_prefix, event_times, bin_edges_dict, dimension=3, display='all', graph='group', max_plots_per_figure=9, event_mean='yes', plot_type='dots', plot_combinations=False):
@@ -335,29 +505,24 @@ def plot_grid_results(results, bin_sizes, smoothing_lengths, title_prefix, event
             result = results.get((bin_size, smoothing_length))
             bin_edges = bin_edges_dict.get(bin_size)
             bin_times = (bin_edges[:-1] + bin_edges[1:]) / 2
-            
+
             if result is None or bin_edges is None:
                 continue
 
             # Loop over each PC combination
             for x_pc, y_pc in pc_combinations:
-                # Create a new figure for each combination in density mode
-                fig, ax = plt.subplots(figsize=(8, 6))
+                # Create a new figure for each combination in density mode with marginals
+                fig, ax_main = plt.subplots(figsize=(10, 8))
 
-                # Plot density for each PC combination in 2D
-                plot_density(ax, result, x_pc, y_pc, bin_times, event_times, display)
+                # Call the function to plot the density with marginal KDEs
+                plot_density(result, x_pc, y_pc, bin_times, event_times, display, event_mean=event_mean)
 
-                # Set title and labels for 2D density plot
-                ax.set_title(f"Density Plot\nBin: {bin_size}s, Smooth: {smoothing_length}s\nPC{x_pc + 1} vs PC{y_pc + 1}", fontsize=12)
-                ax.set_xlabel(f'PC{x_pc + 1}', fontsize=10)
-                ax.set_ylabel(f'PC{y_pc + 1}', fontsize=10)
-
-                # Show each density plot immediately
+                # Display each figure
                 plt.tight_layout()
-                plt.savefig(f'{title_prefix} - {dimension}D Projections - Density Plot of Component {x_pc+1} and Component {y_pc+1}', dpi=700)
+                plt.savefig(f' Density{x_pc+1}vs{y_pc+1}', dpi=700)
                 plt.show()
 
-        return  # Skip the rest of the function for density plots
+        return  # Exit function after handling density plots since they are handled separately
 
     # Original logic for dots scatter plots (group/single)
     num_figures = math.ceil((num_plots * len(pc_combinations)) / max_plots_per_figure)
@@ -407,24 +572,18 @@ def plot_grid_results(results, bin_sizes, smoothing_lengths, title_prefix, event
                             ax = fig.add_subplot(111, projection='3d')
                         else:
                             ax = fig.add_subplot(111)
-
+            for x_pc, y_pc in pc_combinations:
                 # Handle scatter plots
                 if plot_type == 'dots':
                     # Plot based on selected dimension
                     if dimension == 2:
-                        plot_2d_scatter(ax, result, x_pc, y_pc)
+                        plot_2d_scatter(ax, result, x_pc, y_pc, bin_times, event_times, display, event_mean=event_mean)
                     elif dimension == 3:
                         # Ensure ax is 3D
                         if not hasattr(ax, 'get_proj'):
                             ax = fig.add_subplot(ax.get_subplotspec().rowspan.start, ax.get_subplotspec().colspan.start, projection='3d')
 
-                        plot_3d_scatter(ax, result, bin_times, event_times, display)
-
-                # Set title and labels for scatter plots
-                if dimension == 2:
-                    ax.set_title(f"Scatter Plot\nBin: {bin_size}s\nSmooth: {smoothing_length}s\nPC{x_pc + 1} vs PC{y_pc + 1}", fontsize=10)
-                    ax.set_xlabel(f'PC{x_pc + 1}', fontsize=8)
-                    ax.set_ylabel(f'PC{y_pc + 1}', fontsize=8)
+                        plot_3d_scatter(ax, result, bin_times, event_times, display, event_mean=event_mean)
 
                 plot_idx += 1
 
@@ -435,13 +594,16 @@ def plot_grid_results(results, bin_sizes, smoothing_lengths, title_prefix, event
             # Show each group of plots immediately after generating them
             fig.suptitle(f'{title_prefix} - {dimension}D Projections - Figure {fig_num + 1} of {num_figures}', fontsize=16, y=0.98)
             plt.tight_layout(rect=[0, 0, 1, 0.96])
+            print('test')
             plt.show()
 
         elif graph == 'single':
             # Show single plot immediately after generating
             fig.suptitle(f'{title_prefix} - {dimension}D Projection', fontsize=16)
             plt.tight_layout()
+            print('test 2')
             plt.show()
+
 
 
 
@@ -498,7 +660,7 @@ if __name__ == '__main__':
     tdt_signals = load_data(tdt_file)
     t_0_times = tdt_signals['Event Time']
 
-    display = 'all'  # Choose between 'all', 'events', or 'projection'
+    display = 'projection'  # Choose between 'all', 'events', or 'projection'
     graph = 'single'  # Choose between 'single' or 'group'
     max_plots_per_figure = 9  # Set the maximum number of plots per figure
     event_mean = 'yes'   # Choose between 'yes' or 'no'
@@ -506,7 +668,7 @@ if __name__ == '__main__':
     unit_selection = 'unit2' # Choose between  'both', 'unit1', or 'unit2'
     # methods_to_run = ['PCA', 't-SNE', 'UMAP'] # You can modify this to select one, two, or all methods ('PCA', 'UMAP', 't-SNE').
     methods_to_run = ['PCA']
-    plot_type = 'dots'  # Options: 'dots' or 'density'
+    plot_type = 'density'  # Options: 'dots' or 'density'
     # Define multiple t-SNE, PCA, and UMAP configurations
     tsne_configs = [
         {'n_components': 3, 'perplexity': 30, 'learning_rate': 200, 'n_iter': 1000, 'early_exaggeration': 12, 'metric': 'euclidean'},
