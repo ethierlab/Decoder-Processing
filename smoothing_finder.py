@@ -1,145 +1,50 @@
 import tkinter as tk
+import tkinter.ttk as ttk
 import pickle
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 import matplotlib.pyplot as plt
-from tkinter import filedialog
 import os
-# Global variables to store processed data and figures
+
+# Global variables
 smoothed_spikes_matrix = None
 raw_binned_counts_matrix = None
 subunit_names = None
 time_bins_aligned = None
 figures = []
-save_button = None
+t_0_times = None
 
-
-# Function to load TDT data
-def load_data(file_path):
+# Function to load pickle data
+def load_pickle(file_path):
     with open(file_path, 'rb') as f:
         data = pickle.load(f)
     return data
 
+# Function to bin and smooth spike times
 def bin_and_smooth_spike_times(spike_times, bin_size=5, sigma=None):
     spike_times = np.array(spike_times)
-    # Convert spike_times to milliseconds
     spike_times_ms = spike_times * 1000
-
-    # Calculate max_time in ms
-    max_time = int(np.ceil(max(spike_times_ms)))  # ms
-
-    # Create bin edges
+    max_time = int(np.ceil(max(spike_times_ms)))
     bin_edges = np.arange(0, max_time + bin_size, bin_size)
-
-    # Perform histogram binning
     binned_counts, _ = np.histogram(spike_times_ms, bins=bin_edges)
-
-    # Convert binned counts to float for smoothing
     binned_counts = binned_counts.astype(float)
-
-    # Apply Gaussian smoothing if sigma is provided
     if sigma is not None:
         binned_counts = gaussian_filter1d(binned_counts, sigma=sigma)
-
     return binned_counts, bin_edges[:-1]
 
-# Function to generate a heatmap with optional zooming
-def plot_heatmap(smoothed_spikes_matrix, subunit_names, time_bins, zoom_start=None, zoom_end=None):
-    global figures
-    global save_button
-    fig = plt.figure(figsize=(12, 8))
-    fig_label = "Heatmap"
-
-    # Determine the range to display based on zoom
-    if zoom_start is not None and zoom_end is not None:
-        zoom_indices = (time_bins >= zoom_start) & (time_bins <= zoom_end)
-        time_bins = time_bins[zoom_indices]
-        smoothed_spikes_matrix = smoothed_spikes_matrix[:, zoom_indices]
-
-    plt.imshow(smoothed_spikes_matrix, aspect='auto', cmap='hot', 
-               extent=[time_bins[0], time_bins[-1], len(subunit_names), 0])
-    plt.colorbar(label='Spike Density')
-    plt.yticks(ticks=np.arange(len(subunit_names)), labels=subunit_names)
-    plt.xlabel('Time (ms)')
-    plt.ylabel('Subunits')
-    plt.title('Heatmap of Smoothed Spike Times Across Subunits')
-    plt.show()
-    figures.append((fig_label, fig))
-    figure_listbox.insert(tk.END, fig_label)
-    save_button.config(state="normal")
-
-def plot_raw_signal_below_heatmap(smoothed_spikes_matrix, raw_binned_counts_matrix, subunit_names, time_bins,
-                                  selected_channel, selected_subunit):
-    global figures
-    global save_button
-
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10),
-                                   gridspec_kw={'height_ratios': [3, 1]})
-    fig_label = f"Channel_{selected_channel}_Subunit_{selected_subunit.replace(' ', '_')}"
-    # Plot the main heatmap as usual
-    ax1.imshow(smoothed_spikes_matrix, aspect='auto', cmap='hot',
-               extent=[time_bins[0], time_bins[-1], len(subunit_names), 0])
-    ax1.set_yticks(ticks=np.arange(len(subunit_names)), labels=subunit_names)
-    ax1.set_xlabel('Time (ms)')
-    ax1.set_ylabel('Subunits')
-    ax1.set_title('Heatmap of Smoothed Spike Times Across Subunits')
-
-    # Extract subunit number from selected_subunit
-    subunit_number = selected_subunit.split(' ')[1]  # '1' or '2'
-    subunit_name_to_find = f"{selected_channel}#{subunit_number}"
-
-    if subunit_name_to_find in subunit_names:
-        idx = subunit_names.index(subunit_name_to_find)
-        raw_counts = raw_binned_counts_matrix[idx]
-        smoothed_counts = smoothed_spikes_matrix[idx]
-
-        # Plot the raw and smoothed counts
-        ax2.plot(time_bins, raw_counts, label=f'Raw Channel {selected_channel} Subunit {subunit_number}',
-                 linestyle='--')
-        ax2.plot(time_bins, smoothed_counts, label=f'Smoothed Channel {selected_channel} Subunit {subunit_number}')
-        ax2.set_xlabel('Time (ms)')
-        ax2.set_ylabel('Spike Count')
-        ax2.set_title(f'Raw and Smoothed Signals for Channel {selected_channel} Subunit {subunit_number}')
-        ax2.legend()
-    else:
-        print(f"Subunit {subunit_number} of Channel {selected_channel} not found in data.")
-
-    plt.tight_layout()
-    plt.show()
-    figures.append((fig_label, fig))
-    figure_listbox.insert(tk.END, fig_label)
-    save_button.config(state="normal")
-
-# Function to handle subunit selection
+# Function to get selected subunits
 def get_subunit_selection():
-    subunit_1_selected = subunit_1_var.get()
-    subunit_2_selected = subunit_2_var.get()
     selected_subunits = []
-    if subunit_1_selected:
+    if subunit_1_var.get():
         selected_subunits.append("Subunit 1")
-    if subunit_2_selected:
+    if subunit_2_var.get():
         selected_subunits.append("Subunit 2")
     return selected_subunits
 
-# Function to z-score normalize the data
-def z_score_normalize(data):
-    mean = np.mean(data)
-    std_dev = np.std(data)
-    # Check if std_dev is not zero to avoid division by zero
-    if std_dev == 0:
-        return data  # No need to z-score if std_dev is zero
-    return (data - mean) / std_dev
-
-# Function to parse the input and get the selected channels
-def get_channel_selection():
-    input_text = channel_entry.get()
-    channels = parse_channels(input_text)
-    return channels
-
-# Function to parse the input channels based on user format
+# Function to parse channels
 def parse_channels(input_text):
     channels = set()
-    input_text = input_text.replace(' ', '')  # Remove spaces
+    input_text = input_text.replace(' ', '')
     if input_text:
         for part in input_text.split(','):
             if '-' in part:
@@ -149,36 +54,200 @@ def parse_channels(input_text):
                 channels.add(int(part))
     return sorted(channels)
 
-def save_plots():
+# Function to get selected channels
+def get_channel_selection():
+    input_text = channel_entry.get()
+    channels = parse_channels(input_text)
+    return channels
+
+def toggle_trial_selection():
+    if plot_all_trials_var.get():
+        # Disable the trial dropdown menu
+        trial_menu.config(state="disabled")
+    else:
+        # Enable the trial dropdown menu
+        trial_menu.config(state="normal")
+
+# Function to handle data processing
+def handle_selection():
+    global smoothed_spikes_matrix
+    global raw_binned_counts_matrix
+    global subunit_names
+    global time_bins_aligned
+    global t_0_times
+    
+    # Clear previous figures and listbox entries
+    figures.clear()
+    figure_listbox.delete(0, tk.END)
+    save_button.config(state="disabled")
+    peth_button.config(state="disabled")
+    average_activity_button.config(state="disabled")
+    peth_subunit_menu['menu'].delete(0, 'end')
+    
+    selected_subunits = get_subunit_selection()
+    selected_channels = get_channel_selection()
+    apply_z_score = z_score_var.get()
+    
+    try:
+        bin_size = int(bin_size_entry.get())
+        smoothing_length = float(smoothing_length_entry.get())
+        sigma = smoothing_length / bin_size
+        zoom_start = float(zoom_start_entry.get()) if zoom_start_entry.get() else None
+        zoom_end = float(zoom_end_entry.get()) if zoom_end_entry.get() else None
+    except ValueError:
+        print("Invalid input for bin size, smoothing length, or zoom values.")
+        return
+    
+    # Load experiment data
+    experiment_data = load_pickle('experiment_data.pkl')
+    
+    smoothed_spikes_matrix = []
+    raw_binned_counts_matrix = []
+    subunit_names = []
+    max_time_length = 0
+    
+    for channel, ids in experiment_data['data'].items():
+        channel_number = int(channel.split('Channel')[1])
+        if channel_number not in selected_channels:
+            continue
+        for id_, values in ids.items():
+            subunit_number = id_.split('#')[1]
+            if f"Subunit {subunit_number}" not in selected_subunits:
+                continue
+            spike_times = values['spike_times']
+            binned_counts, time_bins = bin_and_smooth_spike_times(spike_times, bin_size=bin_size, sigma=None)
+            binned_counts = binned_counts.astype(float)
+            raw_binned_counts_matrix.append(binned_counts)
+            smoothed_spikes = gaussian_filter1d(binned_counts, sigma=sigma)
+            if apply_z_score:
+                smoothed_spikes = z_score_normalize(smoothed_spikes)
+            if len(smoothed_spikes) > max_time_length:
+                max_time_length = len(smoothed_spikes)
+            smoothed_spikes_matrix.append(smoothed_spikes)
+            subunit_name = f"{channel_number}#{subunit_number}"
+            subunit_names.append(subunit_name)
+    
+    # Align matrices
+    for i in range(len(smoothed_spikes_matrix)):
+        if len(smoothed_spikes_matrix[i]) < max_time_length:
+            smoothed_spikes_matrix[i] = np.pad(smoothed_spikes_matrix[i],
+                                               (0, max_time_length - len(smoothed_spikes_matrix[i])),
+                                               'constant')
+        if len(raw_binned_counts_matrix[i]) < max_time_length:
+            raw_binned_counts_matrix[i] = np.pad(raw_binned_counts_matrix[i],
+                                                 (0, max_time_length - len(raw_binned_counts_matrix[i])),
+                                                 'constant')
+    smoothed_spikes_matrix = np.array(smoothed_spikes_matrix)
+    raw_binned_counts_matrix = np.array(raw_binned_counts_matrix)
+    time_bins_aligned = np.arange(max_time_length) * bin_size
+    
+    # Plot heatmap
+    plot_heatmap(smoothed_spikes_matrix, subunit_names, time_bins_aligned, zoom_start, zoom_end)
+    
+    # Update PETH subunit dropdown menu
+    peth_subunit_var.set(subunit_names[0])
+    peth_subunit_menu['menu'].delete(0, 'end')
+    for subunit in subunit_names:
+        peth_subunit_menu['menu'].add_command(label=subunit, command=tk._setit(peth_subunit_var, subunit))
+    peth_subunit_menu.config(state="normal")  # Enable the dropdown menu
+    peth_button.config(state="normal")
+        
+    # Load t_0_times
+    tdt_file = tdt_file_entry.get()
+    try:
+        tdt_signals = load_pickle(tdt_file)
+        t_0_times = tdt_signals['Event Time'] * 1000  # Convert to ms if necessary
+    except Exception as e:
+        print(f"Error loading TDT signals: {e}")
+        return
+    
+    # Populate trial dropdown menu
+    trial_numbers = [f"Trial {idx + 1}" for idx in range(len(t_0_times))]
+    trial_var.set(trial_numbers[0])  # Set default value
+    trial_menu['menu'].delete(0, 'end')
+    for trial_label_text in trial_numbers:
+        trial_menu['menu'].add_command(label=trial_label_text, command=tk._setit(trial_var, trial_label_text))
+    trial_menu.config(state="normal")  # Enable the dropdown menu
+
+    # Reset the "Plot All Trials" checkbox
+    plot_all_trials_var.set(0)
+    toggle_trial_selection()
+
+    # Enable the average activity button
+    average_activity_button.config(state="normal")
+
+
+    # Enable save button if any figures have been generated
+    if figures:
+        save_button.config(state="normal")
+
+# Function to plot heatmap
+def plot_heatmap(smoothed_spikes_matrix, subunit_names, time_bins, zoom_start=None, zoom_end=None):
+    global figures
+    fig = plt.figure(figsize=(12, 8))
+    if zoom_start is not None and zoom_end is not None:
+        zoom_indices = (time_bins >= zoom_start) & (time_bins <= zoom_end)
+        time_bins = time_bins[zoom_indices]
+        smoothed_spikes_matrix = smoothed_spikes_matrix[:, zoom_indices]
+    plt.imshow(smoothed_spikes_matrix, aspect='auto', cmap='hot',
+               extent=[time_bins[0], time_bins[-1], len(subunit_names), 0])
+    plt.colorbar(label='Spike Density')
+    plt.yticks(ticks=np.arange(len(subunit_names)), labels=subunit_names)
+    plt.xlabel('Time (ms)')
+    plt.ylabel('Subunits')
+    plt.title('Heatmap of Smoothed Spike Times Across Subunits')
+    plt.show()
+    figures.append(('Heatmap', fig))
+    figure_listbox.insert(tk.END, 'Heatmap')
+    save_button.config(state="normal")
+
+# Function to compute and plot PETH for selected subunit
+def compute_and_plot_peths():
+    global smoothed_spikes_matrix
+    global time_bins_aligned
+    global subunit_names
+    global t_0_times
     global figures
 
-    if not figures:
-        print("No plots to save.")
+    try:
+        pre_event_time = float(pre_event_entry.get())
+        post_event_time = float(post_event_entry.get())
+        bin_size = int(bin_size_entry.get())
+    except ValueError:
+        print("Invalid input for pre-event or post-event time or bin size.")
         return
 
-    # Get selected indices from the listbox
-    selected_indices = figure_listbox.curselection()
-    if not selected_indices:
-        print("No figures selected to save.")
-        return
-
-    # Use current working directory
-    directory = os.getcwd()
-    print(f"Saving selected plots to current directory: {directory}")
-
-    # Save each selected figure
-    for idx in selected_indices:
-        fig_label, fig = figures[idx]
-        filename = f"{fig_label}.png"
-        filepath = os.path.join(directory, filename)
+    # Check if 'Plot All Subunits' is checked
+    if plot_all_subunits_var.get():
+        # Plot PETHs for all subunits
+        selected_indices = list(range(len(subunit_names)))
+        selected_subunits = subunit_names
+    else:
+        # Get the selected subunit index
+        selected_subunit = peth_subunit_var.get()
         try:
-            fig.savefig(filepath)
-            print(f"Saved {filepath}")
-        except Exception as e:
-            print(f"Failed to save {filepath}: {e}")
+            selected_indices = [subunit_names.index(selected_subunit)]
+            selected_subunits = [selected_subunit]
+        except ValueError:
+            print(f"Selected subunit {selected_subunit} not found.")
+            return
 
-    print("Selected plots have been saved.")
-# Function to compute PETHs
+    # Extract the smoothed spikes for the selected subunits
+    selected_smoothed_spikes = smoothed_spikes_matrix[selected_indices]
+
+    # Compute PETHs
+    peths_mean, peths_std, time_bins_peth = compute_peths(
+        selected_smoothed_spikes,
+        time_bins_aligned,
+        t_0_times,
+        bin_size,
+        pre_event_time,
+        post_event_time
+    )
+
+    # Plot PETHs for the selected subunits
+    plot_peths(peths_mean, peths_std, time_bins_peth, selected_subunits, pre_event_time, post_event_time)
+
 def compute_peths(smoothed_spikes_matrix, time_bins_aligned, t_0_times, bin_size, pre_event_time, post_event_time):
     num_subunits = smoothed_spikes_matrix.shape[0]
     time_bins_peth = np.arange(-pre_event_time, post_event_time + bin_size, bin_size)
@@ -192,12 +261,10 @@ def compute_peths(smoothed_spikes_matrix, time_bins_aligned, t_0_times, bin_size
             window_end = t0 + post_event_time
             idx_start = np.searchsorted(time_bins_aligned, window_start)
             idx_end = np.searchsorted(time_bins_aligned, window_end)
-            # Handle boundary conditions
             if idx_start < 0 or idx_end > len(subunit_spikes):
                 continue
             trial_data = subunit_spikes[idx_start:idx_end]
             expected_length = len(time_bins_peth)
-            # Pad or trim to match expected length
             if len(trial_data) < expected_length:
                 trial_data = np.pad(trial_data, (0, expected_length - len(trial_data)), 'constant')
             elif len(trial_data) > expected_length:
@@ -216,417 +283,355 @@ def compute_peths(smoothed_spikes_matrix, time_bins_aligned, t_0_times, bin_size
     peths_std = np.array(peths_std)
     return peths_mean, peths_std, time_bins_peth
 
-# Function to plot PETHs
-def plot_peths(peths_mean, peths_std, time_bins_peth, subunit_names):
+def plot_peths(peths_mean, peths_std, time_bins_peth, subunit_names, pre_event_time, post_event_time):
     global figures
     global save_button
-    
+
     num_subunits = len(subunit_names)
     for i in range(num_subunits):
         fig = plt.figure()
-        fig_label = f"PETH_Subunit_{subunit_label.replace('#', '_')}"
         mean = peths_mean[i]
         std = peths_std[i]
         plt.plot(time_bins_peth, mean, label='Mean')
         plt.fill_between(time_bins_peth, mean - std, mean + std, alpha=0.3, label='Std Dev')
-        plt.title(f'PETH for Subunit {subunit_names[i]}')
+        plt.title(f'PETH for Ch{subunit_names[i]}')
         plt.xlabel('Time relative to event (ms)')
         plt.ylabel('Spike Density')
-        plt.axvline(0, color='red', linestyle='--')  # Add vertical line at time zero
+        plt.axvline(0, color='red', linestyle='--')
         plt.legend()
         plt.show()
-        figures.append(fig)
+        fig_label = f"PETH_{subunit_names[i].replace('#', '_')}_pre{int(pre_event_time)}_post{int(post_event_time)}"
+        figures.append((fig_label, fig))
         figure_listbox.insert(tk.END, fig_label)
         save_button.config(state="normal")
 
-# Function to compute and plot PETHs for the selected subunit
-def compute_and_plot_peths():
+# Function to compute and plot average activity over subunits for selected trial(s)
+def compute_and_plot_average_activity():
     global smoothed_spikes_matrix
     global time_bins_aligned
-    global subunit_names
+    global t_0_times
+    global figures
 
-    # Get TDT file path
-    tdt_file = tdt_file_entry.get()
-
-    # Load tdt_signals and t_0_times
-    try:
-        tdt_signals = load_data(tdt_file)
-        t_0_times = tdt_signals['Event Time'] * 1000  # Convert to ms if necessary
-    except Exception as e:
-        print(f"Error loading TDT signals: {e}")
-        return
-
-    # Get pre-event and post-event times
     try:
         pre_event_time = float(pre_event_entry.get())
         post_event_time = float(post_event_entry.get())
-    except ValueError:
-        print("Invalid input for pre-event or post-event time.")
-        return
-
-    # Get bin size
-    try:
         bin_size = int(bin_size_entry.get())
     except ValueError:
-        print("Invalid input for bin size.")
+        print("Invalid input for pre-event or post-event time or bin size.")
         return
 
-    # Get selected subunit for PETH plotting
-    selected_subunit = peth_subunit_var.get()
-    try:
-        subunit_idx = subunit_names.index(selected_subunit)
-    except ValueError:
-        print(f"Selected subunit {selected_subunit} not found.")
-        return
+    if plot_all_trials_var.get():
+        # "Plot All Trials" is checked
+        # Loop over all trials
+        for trial_index, t0 in enumerate(t_0_times):
+            selected_t0_times = [t0]  # Single trial in a list
 
-    # Compute PETH for the selected subunit
-    peths_mean, peths_std, time_bins_peth = compute_peths(
-        smoothed_spikes_matrix[subunit_idx:subunit_idx+1],  # Pass only the selected subunit
-        time_bins_aligned,
-        t_0_times,
-        bin_size,
-        pre_event_time,
-        post_event_time
-    )
+            # Compute average activity
+            average_activity, std_activity, time_bins_peth = compute_average_activity(
+                smoothed_spikes_matrix,
+                time_bins_aligned,
+                selected_t0_times,
+                bin_size,
+                pre_event_time,
+                post_event_time
+            )
 
-    # Plot PETH for the selected subunit
-    plot_peths(peths_mean, peths_std, time_bins_peth, [selected_subunit])  # Pass single subunit name in a list
+            # Label for the plot
+            trial_number = trial_index + 1
+            plot_label = f"Average_Activity_Trial_{trial_number}"
 
-# Function to handle the final selection and data processing
-def handle_selection():
-    global smoothed_spikes_matrix
-    global raw_binned_counts_matrix
-    global subunit_names
-    global time_bins_aligned
-    
-    
-    # Clear previous figures and listbox entries
-    figures.clear()
-    figure_listbox.delete(0, tk.END)
-    save_button.config(state="disabled")
-
-    selected_subunits = get_subunit_selection()
-    selected_channels = get_channel_selection()
-    print(f"Selected Subunits: {selected_subunits}")
-    print(f"Selected Channels: {selected_channels}")
-
-    # Get sigma, bin_size, z-score, zoom_start, and zoom_end values from GUI
-    try:
-        bin_size = int(bin_size_entry.get())  # Bin size in ms
-        smoothing_length = float(smoothing_length_entry.get())  # Smoothing length in ms
-        zoom_start = float(zoom_start_entry.get()) if zoom_start_entry.get() else None
-        zoom_end = float(zoom_end_entry.get()) if zoom_end_entry.get() else None
-        # Get z-score value from GUI
-        apply_z_score = z_score_var.get()
-        sigma = smoothing_length / bin_size
-    except ValueError:
-        print("Invalid input for bin size, sigma, or zoom values. Please enter valid numbers.")
-        return
-
-    # Load the experiment data
-    experiment_data = load_data('experiment_data.pkl')
-
-    # Initialize the lists to store the data for each subunit
-    smoothed_spikes_matrix = []
-    raw_binned_counts_matrix = []
-    subunit_names = []
-
-    # Determine the maximum time length for aligning the heatmap
-    max_time_length = 0
-
-    # Process each channel and ID based on user selection
-    for channel, ids in experiment_data['data'].items():
-        channel_number = int(channel.split('Channel')[1])
-
-        if channel_number not in selected_channels:
-            continue  # Skip if channel is not selected
-
-        for id_, values in ids.items():
-            subunit_number = id_.split('#')[1]
-            if f"Subunit {subunit_number}" not in selected_subunits:
-                continue  # Skip if subunit is not selected
-
-            spike_times = values['spike_times']
-
-            # Binning of spike_times for the subunit without smoothing to get raw counts
-            binned_counts, time_bins = bin_and_smooth_spike_times(spike_times, bin_size=bin_size, sigma=None)  # sigma=None for raw counts
-
-            # Convert binned counts to float
-            binned_counts = binned_counts.astype(float)
-
-            # Store the raw binned counts
-            raw_binned_counts_matrix.append(binned_counts)
-
-            # Apply Gaussian smoothing to the binned counts
-            smoothed_spikes = gaussian_filter1d(binned_counts, sigma=sigma)
-
-            # Apply Z-Score normalization if checked
-            if apply_z_score:
-                smoothed_spikes = z_score_normalize(smoothed_spikes)
-
-            # Update the maximum time length
-            if len(smoothed_spikes) > max_time_length:
-                max_time_length = len(smoothed_spikes)
-
-            # Store the smoothed data
-            smoothed_spikes_matrix.append(smoothed_spikes)
-
-            # Store the short name of the subunit, e.g., '17#1'
-            subunit_name = f"{channel_number}#{subunit_number}"
-            subunit_names.append(subunit_name)
-
-    # Align all matrices to the same length by padding with zeros
-    for i in range(len(smoothed_spikes_matrix)):
-        if len(smoothed_spikes_matrix[i]) < max_time_length:
-            smoothed_spikes_matrix[i] = np.pad(smoothed_spikes_matrix[i],
-                                               (0, max_time_length - len(smoothed_spikes_matrix[i])),
-                                               'constant')
-        if len(raw_binned_counts_matrix[i]) < max_time_length:
-            raw_binned_counts_matrix[i] = np.pad(raw_binned_counts_matrix[i],
-                                                 (0, max_time_length - len(raw_binned_counts_matrix[i])),
-                                                 'constant')
-
-    # Convert to numpy matrices
-    smoothed_spikes_matrix = np.array(smoothed_spikes_matrix)
-    raw_binned_counts_matrix = np.array(raw_binned_counts_matrix)
-
-    # Generate aligned time bins
-    time_bins_aligned = np.arange(max_time_length) * bin_size
-
-    # Check for time range validity and display heatmap with optional zoom
-    if zoom_start is not None and zoom_end is not None:
-        if zoom_start < 0 or zoom_end > time_bins_aligned[-1]:
-            print(f"Time index out of range. Maximum time is {time_bins_aligned[-1]} ms.")
+            # Plot the average activity
+            plot_average_activity(average_activity, std_activity, time_bins_peth, plot_label)
+    else:
+        # "Plot All Trials" is unchecked
+        # Get the selected trial
+        selected_trial_label = trial_var.get()
+        if not selected_trial_label:
+            print("No trial selected.")
             return
 
-    # Display the heatmap with optional zoom
-    plot_heatmap(smoothed_spikes_matrix, subunit_names, time_bins_aligned, zoom_start, zoom_end)
+        try:
+            # Extract the trial index from the label (e.g., "Trial 1" -> index 0)
+            trial_index = int(selected_trial_label.split(' ')[1]) - 1
+            selected_t0_times = [t_0_times[trial_index]]  # Single trial in a list
+        except Exception as e:
+            print(f"Error parsing selected trial: {e}")
+            return
 
-    # Populate the plotting selection dropdowns
-    available_channels = sorted(set([int(name.split('#')[0]) for name in subunit_names]))
-    available_subunits = sorted(set(['Subunit ' + name.split('#')[1] for name in subunit_names]))
+        # Compute average activity
+        average_activity, std_activity, time_bins_peth = compute_average_activity(
+            smoothed_spikes_matrix,
+            time_bins_aligned,
+            selected_t0_times,
+            bin_size,
+            pre_event_time,
+            post_event_time
+        )
 
-    # Update the channel dropdown menu
-    plot_channel_var.set(available_channels[0])  # Set default value
-    plot_channel_menu['menu'].delete(0, 'end')
-    for channel in available_channels:
-        plot_channel_menu['menu'].add_command(label=channel, command=tk._setit(plot_channel_var, channel))
-    plot_channel_menu.config(state="normal")  # Enable the dropdown
+        # Label for the plot
+        trial_number = trial_index + 1
+        plot_label = f"Average_Activity_Trial_{trial_number}"
 
-    # Update the subunit dropdown menu
-    plot_subunit_var.set(available_subunits[0])  # Set default value
-    plot_subunit_menu['menu'].delete(0, 'end')
-    for subunit in available_subunits:
-        plot_subunit_menu['menu'].add_command(label=subunit, command=tk._setit(plot_subunit_var, subunit))
-    plot_subunit_menu.config(state="normal")  # Enable the dropdown
+        # Plot the average activity
+        plot_average_activity(average_activity, std_activity, time_bins_peth, plot_label)
 
-    # Enable the plot button
-    plot_button.config(state="normal")
 
-    # Enable the PETH button after data is processed
-    peth_button.config(state="normal")
 
-    # Update the PETH subunit dropdown menu
-    peth_subunit_var.set(subunit_names[0])  # Set default value
-    peth_subunit_menu['menu'].delete(0, 'end')
-    for subunit in subunit_names:
-        peth_subunit_menu['menu'].add_command(label=subunit, command=tk._setit(peth_subunit_var, subunit))
-    peth_subunit_menu.config(state="normal")  # Enable the dropdown
+def compute_average_activity(smoothed_spikes_matrix, time_bins_aligned, t0_times, bin_size, pre_event_time, post_event_time):
+    num_subunits = smoothed_spikes_matrix.shape[0]
+    time_bins_peth = np.arange(-pre_event_time, post_event_time + bin_size, bin_size)
+    all_subunits_activity = []
 
-    # Inform the user to select the subunit to plot PETH
-    print("Select the subunit to plot PETH from the dropdown menu.")
+    for i in range(num_subunits):
+        subunit_spikes = smoothed_spikes_matrix[i]
+        trials = []
+        for t0 in t0_times:
+            window_start = t0 - pre_event_time
+            window_end = t0 + post_event_time
+            idx_start = np.searchsorted(time_bins_aligned, window_start)
+            idx_end = np.searchsorted(time_bins_aligned, window_end)
+            if idx_start < 0 or idx_end > len(subunit_spikes):
+                continue
+            trial_data = subunit_spikes[idx_start:idx_end]
+            expected_length = len(time_bins_peth)
+            if len(trial_data) < expected_length:
+                trial_data = np.pad(trial_data, (0, expected_length - len(trial_data)), 'constant')
+            elif len(trial_data) > expected_length:
+                trial_data = trial_data[:expected_length]
+            trials.append(trial_data)
+        if trials:
+            trials = np.array(trials)
+            # Average across trials for this subunit
+            subunit_avg = np.mean(trials, axis=0)
+            all_subunits_activity.append(subunit_avg)
+        else:
+            all_subunits_activity.append(np.zeros(len(time_bins_peth)))
+    all_subunits_activity = np.array(all_subunits_activity)
+    # Compute mean and std across subunits
+    average_activity = np.mean(all_subunits_activity, axis=0)
+    std_activity = np.std(all_subunits_activity, axis=0)
+    return average_activity, std_activity, time_bins_peth
 
-# Function to plot the selected channel and subunit
-def plot_selected_channel():
-    selected_channel = int(plot_channel_var.get())
-    selected_subunit = plot_subunit_var.get()  # e.g., 'Subunit 1'
+def plot_average_activity(average_activity, std_activity, time_bins_peth, plot_label):
+    global figures
+    global save_button
+    global figure_listbox
 
-    # Proceed to plot the selected channel and subunit
-    plot_raw_signal_below_heatmap(
-        smoothed_spikes_matrix,
-        raw_binned_counts_matrix,
-        subunit_names,
-        time_bins_aligned,
-        selected_channel,
-        selected_subunit
-    )
+    fig = plt.figure()
+    mean = average_activity
+    std = std_activity
+    plt.plot(time_bins_peth, mean, label='Mean')
+    plt.fill_between(time_bins_peth, mean - std, mean + std, alpha=0.3, label='Std Dev')
+    plt.xlabel('Time relative to event (ms)')
+    plt.ylabel('Spike Density')
+    plt.title(f'Average Activity Across Subunits\n(Trials {plot_label.split("_")[-1]})')
+    plt.axvline(0, color='red', linestyle='--')
+    plt.legend()
+    plt.show()
+    # Add figure to the list for saving
+    figures.append((plot_label, fig))
+    figure_listbox.insert(tk.END, plot_label)
+    save_button.config(state="normal")
 
-# Function to handle subunit selection
-def get_subunit_selection():
-    subunit_1_selected = subunit_1_var.get()
-    subunit_2_selected = subunit_2_var.get()
-    selected_subunits = []
-    if subunit_1_selected:
-        selected_subunits.append("Subunit 1")
-    if subunit_2_selected:
-        selected_subunits.append("Subunit 2")
-    return selected_subunits
+# Function to save selected plots
+def save_plots():
+    global figures
+    selected_indices = figure_listbox.curselection()
+    if not selected_indices:
+        print("No figures selected to save.")
+        return
+    directory = os.getcwd()
+    print(f"Saving selected plots to current directory: {directory}")
+    for idx in selected_indices:
+        fig_label, fig = figures[idx]
+        filename = f"{fig_label}.png"
+        filepath = os.path.join(directory, filename)
+        try:
+            fig.savefig(filepath)
+            print(f"Saved {filepath}")
+        except Exception as e:
+            print(f"Failed to save {filepath}: {e}")
+    print("Selected plots have been saved.")
 
-# Function to z-score normalize the data
+# Function to z-score normalize data
 def z_score_normalize(data):
     mean = np.mean(data)
     std_dev = np.std(data)
-    # Check if std_dev is not zero to avoid division by zero
     if std_dev == 0:
-        return data  # No need to z-score if std_dev is zero
+        return data
     return (data - mean) / std_dev
 
-# Function to parse the input and get the selected channels
-def get_channel_selection():
-    input_text = channel_entry.get()
-    channels = parse_channels(input_text)
-    return channels
-
-# Function to parse the input channels based on user format
-def parse_channels(input_text):
-    channels = set()
-    input_text = input_text.replace(' ', '')  # Remove spaces
-    if input_text:
-        for part in input_text.split(','):
-            if '-' in part:
-                start, end = map(int, part.split('-'))
-                channels.update(range(start, end + 1))
-            else:
-                channels.add(int(part))
-    return sorted(channels)
-
-# Create the main window
+# GUI Setup
 root = tk.Tk()
 root.title("Interactive Selection Tool")
 
-# Now that the root window is created, we can initialize Tkinter variables
-# Variables to store checkbox values
-subunit_1_var = tk.IntVar(value=1)  # 1 means selected by default
+# Variables for checkboxes
+plot_all_subunits_var = tk.IntVar(value=0)  # For 'Plot All Subunits' checkbox
+select_all_trials_var = tk.IntVar(value=0)  # For 'Select All Trials' checkbox
+
+
+# Variable for 'Select All Trials' checkbox
+select_all_trials_var = tk.IntVar(value=0)  # 0 means unchecked by default
+
+# Frames for layout
+left_frame = tk.Frame(root)
+left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+right_frame = tk.Frame(root)
+right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+# Subunit and Channel Selection
+selection_frame = tk.LabelFrame(left_frame, text="Selection")
+selection_frame.pack(fill=tk.X, padx=5, pady=5)
+
+# TDT file path
+tdt_file_label = tk.Label(selection_frame, text="Enter TDT File Path:")
+tdt_file_label.grid(row=4, column=0, sticky=tk.W)
+tdt_file_entry = tk.Entry(selection_frame)
+tdt_file_entry.insert(0, "tdt_signals.pkl")
+tdt_file_entry.grid(row=4, column=1, sticky=tk.W)
+
+# Signal file path
+signal_file_label = tk.Label(selection_frame, text="Enter Signal File Path:")
+signal_file_label.grid(row=5, column=0, sticky=tk.W)
+signal_file_entry = tk.Entry(selection_frame)
+signal_file_entry.insert(0, "experiment_data.pkl")
+signal_file_entry.grid(row=5, column=1, sticky=tk.W)
+
+
+# Variables
+subunit_1_var = tk.IntVar(value=1)
 subunit_2_var = tk.IntVar(value=1)
-
-# Variables to store the user's choices for plotting
-plot_channel_var = tk.StringVar()
-plot_subunit_var = tk.StringVar()
-
-# Variable for PETH subunit selection
+z_score_var = tk.IntVar(value=0)
 peth_subunit_var = tk.StringVar()
 
-# Section for subunit selection
-subunit_label = tk.Label(root, text="Select Subunits:")
-subunit_label.pack()
+# Subunit selection
+subunit_label = tk.Label(selection_frame, text="Select Subunits:")
+subunit_label.grid(row=0, column=0, sticky=tk.W)
+subunit_1_checkbox = tk.Checkbutton(selection_frame, text="Subunit 1", variable=subunit_1_var)
+subunit_2_checkbox = tk.Checkbutton(selection_frame, text="Subunit 2", variable=subunit_2_var)
+subunit_1_checkbox.grid(row=1, column=0, sticky=tk.W)
+subunit_2_checkbox.grid(row=1, column=1, sticky=tk.W)
 
-# Checkboxes for subunit selection
-subunit_1_checkbox = tk.Checkbutton(root, text="Subunit 1", variable=subunit_1_var)
-subunit_2_checkbox = tk.Checkbutton(root, text="Subunit 2", variable=subunit_2_var)
-
-# Display checkboxes
-subunit_1_checkbox.pack()
-subunit_2_checkbox.pack()
-
-# Section for channel selection
-channel_label = tk.Label(root, text="Enter Channels (e.g., 1-3, 5, 7):")
-channel_label.pack()
-
-channel_entry = tk.Entry(root)
+# Channel selection
+channel_label = tk.Label(selection_frame, text="Enter Channels (e.g., 1-3,5,7):")
+channel_label.grid(row=2, column=0, sticky=tk.W)
+channel_entry = tk.Entry(selection_frame)
 channel_entry.insert(0, '1-32')
-channel_entry.pack()
+channel_entry.grid(row=2, column=1, sticky=tk.W)
 
-# Section for z-score normalization option
-z_score_var = tk.IntVar(value=0)  # 0 means not selected by default
-z_score_checkbox = tk.Checkbutton(root, text="Apply Z-Score Normalization", variable=z_score_var)
-z_score_checkbox.pack()
+# Z-score normalization
+z_score_checkbox = tk.Checkbutton(selection_frame, text="Apply Z-Score Normalization", variable=z_score_var)
+z_score_checkbox.grid(row=3, column=0, columnspan=2, sticky=tk.W)
 
-# Section for bin size input
-bin_size_label = tk.Label(root, text="Enter Bin Size (ms):")
-bin_size_label.pack()
+# Parameters Frame
+parameters_frame = tk.LabelFrame(left_frame, text="Parameters")
+parameters_frame.pack(fill=tk.X, padx=5, pady=5)
 
-bin_size_entry = tk.Entry(root)
-bin_size_entry.insert(0, "5")  # Default value
-bin_size_entry.pack()
+# Bin size
+bin_size_label = tk.Label(parameters_frame, text="Enter Bin Size (ms):")
+bin_size_label.grid(row=0, column=0, sticky=tk.W)
+bin_size_entry = tk.Entry(parameters_frame)
+bin_size_entry.insert(0, "5")
+bin_size_entry.grid(row=0, column=1, sticky=tk.W)
 
-# Section for smoothing length input
-smoothing_length_label = tk.Label(root, text="Smoothing Length (ms):")
-smoothing_length_label.pack()
+# Smoothing length
+smoothing_length_label = tk.Label(parameters_frame, text="Smoothing Length (ms):")
+smoothing_length_label.grid(row=1, column=0, sticky=tk.W)
+smoothing_length_entry = tk.Entry(parameters_frame)
+smoothing_length_entry.insert(0, "50")
+smoothing_length_entry.grid(row=1, column=1, sticky=tk.W)
 
-smoothing_length_entry = tk.Entry(root)
-smoothing_length_entry.insert(0, "50")  # Default smoothing length in ms
-smoothing_length_entry.pack()
+# Zoom start
+zoom_start_label = tk.Label(parameters_frame, text="Zoom Start Time (ms):")
+zoom_start_label.grid(row=2, column=0, sticky=tk.W)
+zoom_start_entry = tk.Entry(parameters_frame)
+zoom_start_entry.grid(row=2, column=1, sticky=tk.W)
 
-# Section for zoom start input
-zoom_start_label = tk.Label(root, text="Zoom Start Time (ms):")
-zoom_start_label.pack()
+# Zoom end
+zoom_end_label = tk.Label(parameters_frame, text="Zoom End Time (ms):")
+zoom_end_label.grid(row=3, column=0, sticky=tk.W)
+zoom_end_entry = tk.Entry(parameters_frame)
+zoom_end_entry.grid(row=3, column=1, sticky=tk.W)
 
-zoom_start_entry = tk.Entry(root)
-zoom_start_entry.pack()
+# Process Data button
+selection_button = tk.Button(parameters_frame, text="Process Data", command=handle_selection)
+selection_button.grid(row=4, column=0, columnspan=2, pady=5)
 
-# Section for zoom end input
-zoom_end_label = tk.Label(root, text="Zoom End Time (ms):")
-zoom_end_label.pack()
+# PETH Frame
+peth_frame = tk.LabelFrame(left_frame, text="PETH Plotting")
+peth_frame.pack(fill=tk.X, padx=5, pady=5)
 
-zoom_end_entry = tk.Entry(root)
-zoom_end_entry.pack()
+# Variable to store the state of the 'Plot All Subunits' checkbox
+plot_all_subunits_var = tk.IntVar(value=0)  # 0 means unchecked by default
+# Variable for "Plot All Trials" checkbox
+plot_all_trials_var = tk.IntVar(value=0)
 
-# Button to handle the selection and display results
-selection_button = tk.Button(root, text="Process Data", command=handle_selection)
-selection_button.pack()
+# Add the checkbox to the peth_frame
+plot_all_subunits_checkbox = tk.Checkbutton(peth_frame, text="Plot All Subunits", variable=plot_all_subunits_var)
+plot_all_subunits_checkbox.grid(row=4, column=0, columnspan=2, sticky=tk.W)
 
-# Placeholder dropdowns for selecting the channel and subunit to plot
-plot_channel_label = tk.Label(root, text="Select Channel to Plot:")
-plot_channel_label.pack()
-plot_channel_menu = tk.OptionMenu(root, plot_channel_var, [])
-plot_channel_menu.config(state="disabled")  # Initially disabled
-plot_channel_menu.pack()
+# PETH subunit selection
+peth_subunit_label = tk.Label(peth_frame, text="Select Subunit for PETH Plot:")
+peth_subunit_label.grid(row=0, column=0, sticky=tk.W)
+peth_subunit_menu = tk.OptionMenu(peth_frame, peth_subunit_var, [])
+peth_subunit_menu.config(state="disabled")
+peth_subunit_menu.grid(row=0, column=1, sticky=tk.W)
 
-plot_subunit_label = tk.Label(root, text="Select Subunit to Plot:")
-plot_subunit_label.pack()
-plot_subunit_menu = tk.OptionMenu(root, plot_subunit_var, [])
-plot_subunit_menu.config(state="disabled")  # Initially disabled
-plot_subunit_menu.pack()
+# Pre-event time
+pre_event_label = tk.Label(peth_frame, text="Pre-Event Time (ms):")
+pre_event_label.grid(row=1, column=0, sticky=tk.W)
+pre_event_entry = tk.Entry(peth_frame)
+pre_event_entry.insert(0, "1000")
+pre_event_entry.grid(row=1, column=1, sticky=tk.W)
 
-# Button to plot the selected channel and subunit
-plot_button = tk.Button(root, text="Plot Selected Channel and Subunit", command=plot_selected_channel)
-plot_button.config(state="disabled")
-plot_button.pack()
+# Post-event time
+post_event_label = tk.Label(peth_frame, text="Post-Event Time (ms):")
+post_event_label.grid(row=2, column=0, sticky=tk.W)
+post_event_entry = tk.Entry(peth_frame)
+post_event_entry.insert(0, "2000")
+post_event_entry.grid(row=2, column=1, sticky=tk.W)
 
-# Placeholder dropdown for selecting the subunit to plot PETH
-peth_subunit_label = tk.Label(root, text="Select Subunit for PETH Plot:")
-peth_subunit_label.pack()
-peth_subunit_menu = tk.OptionMenu(root, peth_subunit_var, [])
-peth_subunit_menu.config(state="disabled")  # Initially disabled
-peth_subunit_menu.pack()
 
-# Section for TDT file input
-tdt_file_label = tk.Label(root, text="Enter TDT File Path:")
-tdt_file_label.pack()
-tdt_file_entry = tk.Entry(root)
-tdt_file_entry.insert(0, "tdt_signals.pkl")  # Default file name
-tdt_file_entry.pack()
+# Compute and Plot PETHs button
+peth_button = tk.Button(peth_frame, text="Compute and Plot PETHs", command=compute_and_plot_peths)
+peth_button.config(state="disabled")
+peth_button.grid(row=5, column=0, columnspan=2, pady=5)
 
-# Section for pre-event time input
-pre_event_label = tk.Label(root, text="Pre-Event Time (ms):")
-pre_event_label.pack()
-pre_event_entry = tk.Entry(root)
-pre_event_entry.insert(0, "1000")  # Default pre-event time in ms
-pre_event_entry.pack()
+# Average Activity Frame
+average_activity_frame = tk.LabelFrame(left_frame, text="Average Activity Over Subunits")
+average_activity_frame.pack(fill=tk.X, padx=5, pady=5)
 
-# Section for post-event time input
-post_event_label = tk.Label(root, text="Post-Event Time (ms):")
-post_event_label.pack()
-post_event_entry = tk.Entry(root)
-post_event_entry.insert(0, "1000")  # Default post-event time in ms
-post_event_entry.pack()
+# Variable for trial selection
+trial_var = tk.StringVar()
 
-# Button to compute and plot PETHs
-peth_button = tk.Button(root, text="Compute and Plot PETHs", command=compute_and_plot_peths)
-peth_button.config(state="disabled")  # Initially disabled
-peth_button.pack()
+# Trial selection
+trial_label = tk.Label(average_activity_frame, text="Select Trial:")
+trial_label.grid(row=0, column=0, sticky=tk.W)
+trial_menu = tk.OptionMenu(average_activity_frame, trial_var, [])
+trial_menu.config(state="disabled")  # Initially disabled
+trial_menu.grid(row=0, column=1, sticky=tk.W)
 
-# Listbox to display generated figure labels
-figure_listbox_label = tk.Label(root, text="Generated Figures:")
+# Plot All Trials checkbox
+plot_all_trials_checkbox = tk.Checkbutton(average_activity_frame, text="Plot All Trials", variable=plot_all_trials_var, command=toggle_trial_selection)
+plot_all_trials_checkbox.grid(row=1, column=0, columnspan=2, sticky=tk.W)
+
+# Compute and Plot Average Activity button
+average_activity_button = tk.Button(average_activity_frame, text="Compute and Plot Average Activity", command=compute_and_plot_average_activity)
+average_activity_button.config(state="disabled")
+average_activity_button.grid(row=2, column=0, columnspan=2, pady=5)
+
+
+# Save Plots button
+save_button = tk.Button(left_frame, text="Save Selected Plots", command=save_plots)
+save_button.config(state="disabled")
+save_button.pack(pady=5)
+
+# Generated Figures Listbox
+figure_listbox_label = tk.Label(right_frame, text="Generated Figures:")
 figure_listbox_label.pack()
-
-figure_listbox = tk.Listbox(root, selectmode=tk.MULTIPLE, width=50, height=10)
+figure_listbox = tk.Listbox(right_frame, selectmode=tk.MULTIPLE, width=50, height=20)
 figure_listbox.pack()
 
-# Button to save selected plots
-save_button = tk.Button(root, text="Save Selected Plots", command=save_plots)
-save_button.config(state="disabled")  # Initially disabled
-save_button.pack()
-
-# Run the main loop
+# Start the main loop
 root.mainloop()
