@@ -2,7 +2,7 @@ import pickle
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from neural_decoding import WienerFilterDecoder, GRUDecoder, LSTMDecoder
+from Neural_Decoding import WienerFilterDecoder, GRUDecoder, LSTMDecoder
 
 # Load data from a pickle file (customize the filename)
 with open("data.pkl", "rb") as f:

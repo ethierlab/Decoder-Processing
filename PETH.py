@@ -346,10 +346,10 @@ if __name__ == "__main__":
 
     # Variables to handle saving
     save_data = True
-    save_filename = 'projected_data.pkl'
+    save_filename = 'projected_data_test.pkl'
 
     # Variable for PETH visualization
-    PETH = True
+    PETH = False
     # Specify the maximum number of PCs to plot
     max_pc = 3
 
@@ -358,12 +358,23 @@ if __name__ == "__main__":
     averages = {}
     saved_data = {}
 
+
+    # Parameters to specify
+    average_over = 'trials'  # 'trials' or 'components'
+    # For averaging over trials
+    pcs_to_use = [0, 1, 2]  # Zero-based indices of PCs to use
+    trials_to_average = 'all'  # 'all' or list of trial indices
+
+    # For averaging over components
+    trials_to_use = [0]  # Zero-based indices of trials to use
+    pcs_to_average = 'all'  # 'all' or list of component indices ([0, 1, 2])
+    
     # Trial selection variable for visualization
     trial_selection = 'all'  # Can be 'all', an integer, or a list of integers or None
-    selected_methods = ['PCA']  # Use 'PCA', 'UMAP', 't-SNE', or 'all' to select methods
+    selected_methods = ['PCA','UMAP', 't-SNE']  # Use 'PCA', 'UMAP', 't-SNE', or 'all' to select methods
 
     show_average = False  # Set to False if you do not want to see the average projections
-    projection_dim = 2  # Set to 1, 2, or 3 for 1D, 2D, or 3D projections
+    projection_dim = 1  # Set to 1, 2, or 3 for 1D, 2D, or 3D projections
     
     # Apply PCA if selected
     if 'PCA' in selected_methods or selected_methods == 'all':
@@ -426,7 +437,7 @@ if __name__ == "__main__":
             print(f"t-SNE failed: {e}")
     try:
         # Extract 'Force' data
-        force_data = tdt_signals['levier']  # Shape: (N,)
+        force_data = tdt_signals['Levier']  # Shape: (N,)
 
         # Create time axis for 'Force' data
         force_times = np.linspace(0, duration, num=len(force_data))
@@ -450,15 +461,7 @@ if __name__ == "__main__":
             pickle.dump(saved_data, f)
 
     if PETH:
-        # Parameters to specify
-        average_over = 'components'  # 'trials' or 'components'
-        # For averaging over trials
-        pcs_to_use = [0, 1, 2]  # Zero-based indices of PCs to use
-        trials_to_average = 'all'  # 'all' or list of trial indices
-
-        # For averaging over components
-        trials_to_use = [0]  # Zero-based indices of trials to use
-        pcs_to_average = 'all'  # 'all' or list of component indices ([0, 1, 2])
+        
 
         for method in selected_methods:
             if method not in saved_data:
