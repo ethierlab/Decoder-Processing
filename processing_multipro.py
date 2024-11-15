@@ -218,18 +218,6 @@ def plot_density(result, x_pc, y_pc, bin_times, event_times, display, cmap='Blue
     # Set up the JointGrid
     g = sns.JointGrid(x=[], y=[], height=8, ratio=5, marginal_ticks=True)
 
-    # # Number of levels
-    # num_levels = 8
-
-    # # Create a colormap with the same color repeated
-    # same_color_cmap = ListedColormap([color] * num_levels)
-    
-    # z_scores = np.abs(stats.zscore(result[:, [x_pc, y_pc]]))
-    # outlier_mask = (z_scores > 3).any(axis=1)
-    # if np.any(outlier_mask):
-    #     print(f"Removing {np.sum(outlier_mask)} outliers")
-    #     result = result[~outlier_mask]
-
     # Plot densities based on the selected display
     if display == 'all' or display == 'projection':
         # Overall density
@@ -239,7 +227,6 @@ def plot_density(result, x_pc, y_pc, bin_times, event_times, display, cmap='Blue
             cmap=cmap,
             alpha=alpha,
             linewidths=1.5,
-            # levels=num_levels,
             bw_adjust=1.5,
             ax=g.ax_joint
         )
@@ -258,7 +245,7 @@ def plot_density(result, x_pc, y_pc, bin_times, event_times, display, cmap='Blue
         during_mask = np.any([(bin_times >= t_0) & (bin_times < t_0 + 1) for t_0 in event_times], axis=0)
         post_mask = np.any([(bin_times >= t_0 + 1) & (bin_times < t_0 + post_stim) for t_0 in event_times], axis=0)
 
-        # Plot densities for each event period with uniform lines
+        # Plot densities for each event period with consistent colors
         for period, mask, color_period in zip(
             ['1s Before', '1s During', '1s After'],
             [pre_mask, during_mask, post_mask],
@@ -266,50 +253,37 @@ def plot_density(result, x_pc, y_pc, bin_times, event_times, display, cmap='Blue
         ):
             if np.any(mask):
                 # Create a colormap with the same color
-                # same_color_cmap = ListedColormap([color_period] * num_levels)
+                same_color_cmap = ListedColormap([color_period])
+
                 sns.kdeplot(
                     x=result[mask, x_pc],
                     y=result[mask, y_pc],
-                    cmap=cmap,
+                    cmap=same_color_cmap,
                     alpha=alpha,
                     linewidths=1.5,
-                    # levels=num_levels,
                     bw_adjust=1.5,
                     ax=g.ax_joint,
                     label=period
                 )
-                sns.kdeplot(x=result[mask, x_pc], ax=g.ax_marg_x, color=color_period, alpha=0.5, linewidth=1.5)
-                sns.kdeplot(y=result[mask, y_pc], ax=g.ax_marg_y, color=color_period, alpha=0.5, linewidth=1.5)
+                sns.kdeplot(
+                    x=result[mask, x_pc],
+                    ax=g.ax_marg_x,
+                    color=color_period,
+                    alpha=0.5,
+                    linewidth=1.5
+                )
+                sns.kdeplot(
+                    y=result[mask, y_pc],
+                    ax=g.ax_marg_y,
+                    color=color_period,
+                    alpha=0.5,
+                    linewidth=1.5
+                )
 
         # Add legend
         handles, labels = g.ax_joint.get_legend_handles_labels()
         if handles:
             g.ax_joint.legend(handles=handles, labels=labels)
-
-    # Add marginal KDEs based on the selected display
-    if display == 'all' or display == 'projection':
-        sns.kdeplot(x=result[:, x_pc], ax=g.ax_marg_x, color=color, alpha=0.6, linewidth=1.5)
-        sns.kdeplot(y=result[:, y_pc], ax=g.ax_marg_y, color=color, alpha=0.6, linewidth=1.5)
-    elif display == 'events':
-        # Marginal KDEs for specific event segments
-        pre_stim = 1  # 1 second before t_0
-        post_stim = 2  # 2 seconds after t_0
-
-        pre_mask = np.any([(bin_times >= t_0 - pre_stim) & (bin_times < t_0) for t_0 in event_times], axis=0)
-        during_mask = np.any([(bin_times >= t_0) & (bin_times < t_0 + 1) for t_0 in event_times], axis=0)
-        post_mask = np.any([(bin_times >= t_0 + 1) & (bin_times < t_0 + post_stim) for t_0 in event_times], axis=0)
-
-        if np.any(pre_mask):
-            sns.kdeplot(x=result[pre_mask, x_pc], ax=g.ax_marg_x, color='green', alpha=0.5, linewidth=1.5)
-            sns.kdeplot(y=result[pre_mask, y_pc], ax=g.ax_marg_y, color='green', alpha=0.5, linewidth=1.5)
-
-        if np.any(during_mask):
-            sns.kdeplot(x=result[during_mask, x_pc], ax=g.ax_marg_x, color='red', alpha=0.5, linewidth=1.5)
-            sns.kdeplot(y=result[during_mask, y_pc], ax=g.ax_marg_y, color='red', alpha=0.5, linewidth=1.5)
-
-        if np.any(post_mask):
-            sns.kdeplot(x=result[post_mask, x_pc], ax=g.ax_marg_x, color='orange', alpha=0.5, linewidth=1.5)
-            sns.kdeplot(y=result[post_mask, y_pc], ax=g.ax_marg_y, color='orange', alpha=0.5, linewidth=1.5)
 
     # Plot mean trajectory if event_mean == 'yes'
     if event_mean == 'yes':
@@ -346,7 +320,9 @@ def plot_density(result, x_pc, y_pc, bin_times, event_times, display, cmap='Blue
                     g.ax_joint.plot(
                         mean_trajectory[i:i + 2, 0],  # x coordinates
                         mean_trajectory[i:i + 2, 1],  # y coordinates
-                        color=colors[i], linewidth=2, zorder=5
+                        color=colors[i],
+                        linewidth=2,
+                        zorder=5
                     )
 
     # Set axis labels for main density plot
@@ -660,7 +636,7 @@ if __name__ == '__main__':
     tdt_signals = load_data(tdt_file)
     t_0_times = tdt_signals['Event Time']
 
-    display = 'projection'  # Choose between 'all', 'events', or 'projection'
+    display = 'all'  # Choose between 'all', 'events', or 'projection'
     graph = 'single'  # Choose between 'single' or 'group'
     max_plots_per_figure = 9  # Set the maximum number of plots per figure
     event_mean = 'yes'   # Choose between 'yes' or 'no'
