@@ -323,7 +323,7 @@ if __name__ == "__main__":
     selected_methods = ['PCA']  # Use 'PCA', 'UMAP', 't-SNE', or 'all' to select methods
     
     show_average = True  # Set to False if you do not want to see the average projections
-    projection_dim = 2 # Set to 1, 2, or 3 for 1D, 2D, or 3D projections
+    projection_dim = 3 # Set to 1, 2, or 3 for 1D, 2D, or 3D projections
 
     # Define window_start and window_end
     window_start = -1.0

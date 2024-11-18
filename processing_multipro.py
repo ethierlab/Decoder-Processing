@@ -636,7 +636,7 @@ if __name__ == '__main__':
     tdt_signals = load_data(tdt_file)
     t_0_times = tdt_signals['Event Time']
 
-    display = 'all'  # Choose between 'all', 'events', or 'projection'
+    display = 'events'  # Choose between 'all', 'events', or 'projection'
     graph = 'single'  # Choose between 'single' or 'group'
     max_plots_per_figure = 9  # Set the maximum number of plots per figure
     event_mean = 'yes'   # Choose between 'yes' or 'no'
@@ -644,7 +644,7 @@ if __name__ == '__main__':
     unit_selection = 'unit2' # Choose between  'both', 'unit1', or 'unit2'
     # methods_to_run = ['PCA', 't-SNE', 'UMAP'] # You can modify this to select one, two, or all methods ('PCA', 'UMAP', 't-SNE').
     methods_to_run = ['PCA']
-    plot_type = 'density'  # Options: 'dots' or 'density'
+    plot_type = 'dots'  # Options: 'dots' or 'density'
     # Define multiple t-SNE, PCA, and UMAP configurations
     tsne_configs = [
         {'n_components': 3, 'perplexity': 30, 'learning_rate': 200, 'n_iter': 1000, 'early_exaggeration': 12, 'metric': 'euclidean'},

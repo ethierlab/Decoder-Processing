@@ -279,6 +279,7 @@ def plot_peth_with_error(mean_data, std_data, common_times, method_name, average
     plt.xlabel("Time (s) relative to event")
     plt.legend()
     plt.grid(True)
+
     plt.show()
 
 def compute_component_mean_std(trial_data, pcs_to_average):
@@ -345,11 +346,11 @@ if __name__ == "__main__":
     common_times = np.arange(window_start, window_end + bin_size, bin_size)
 
     # Variables to handle saving
-    save_data = True
+    save_data = False
     save_filename = 'projected_data_test.pkl'
 
     # Variable for PETH visualization
-    PETH = False
+    PETH = True
     # Specify the maximum number of PCs to plot
     max_pc = 3
 
@@ -371,7 +372,7 @@ if __name__ == "__main__":
     
     # Trial selection variable for visualization
     trial_selection = 'all'  # Can be 'all', an integer, or a list of integers or None
-    selected_methods = ['PCA','UMAP', 't-SNE']  # Use 'PCA', 'UMAP', 't-SNE', or 'all' to select methods
+    selected_methods = ['PCA']  # Use 'PCA', 'UMAP', 't-SNE', or 'all' to select methods
 
     show_average = False  # Set to False if you do not want to see the average projections
     projection_dim = 1  # Set to 1, 2, or 3 for 1D, 2D, or 3D projections
