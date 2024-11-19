@@ -1,18 +1,17 @@
 import pickle
-import torch
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
 import matplotlib.pyplot as plt
-from Neural_Decoding import WienerCascadeDecoder, GRUDecoder, LSTMDecoder
+from scipy.signal import butter, filtfilt
 
-# Load data from a pickle file (customize the filename)
-with open("projected_data_test.pkl", "rb") as f:
+# Data Loading and Preparation
+with open("data.pkl", "rb") as f:
     saved_data = pickle.load(f)
 
-# Choose which representation to use ('PCA', 'UMAP', or 't-SNE')
-representation = 'PCA'  # Change as needed ('PCA', 'UMAP', 't-SNE')
-
-# Prepare data
-def prepare_data(saved_data, representation):
+# Data Loading and Preparation with Preprocessing
+def prepare_data(saved_data, representation, cutoff, fs, order=5):
     X = []
     y = []
     trials = saved_data[representation]
@@ -20,161 +19,194 @@ def prepare_data(saved_data, representation):
     trial_indices = sorted(trials.keys())
 
     for idx in trial_indices:
-        X.append(trials[idx])  # Shape: (n_components, len(common_times))
-        y.append(force_trials[idx])  # Shape: (Force, len(common_times))
+        X_trial = trials[idx].T  # Shape: (len(common_times), n_components)
+        y_trial = force_trials[idx].T  # Shape: (len(common_times), 1)
 
-    # Convert to NumPy arrays
-    X = np.array(X)  # Shape: [num_trials, n_components, len(common_times)]
-    y = np.array(y)  # Shape: [num_trials, Force, len(common_times)]
+        # Preprocess the force signal
+        # Apply low-pass filter
+        y_filtered = apply_lowpass_filter(y_trial.squeeze(), cutoff, fs, order)
+        y_filtered = y_filtered.reshape(-1, 1)  # Reshape back to (len(common_times), 1)
 
-    print("Shapes after loading:")
-    print(f"X shape: {X.shape}")  # Expected: [num_trials, n_components, len(common_times)]
-    print(f"y shape: {y.shape}")  # Expected: [num_trials, Force, len(common_times)]
+        # Convert to grams
+        y_filtered = (y_filtered - 294) * 1.95  # Convert to grams
 
-    # Transpose
-    X = np.transpose(X, (0, 2, 1))  # Shape: [num_trials, len(common_times), n_components]
-    y = np.transpose(y, (0, 2, 1))  # Shape: [num_trials, len(common_times), Force]
+        X.append(X_trial)
+        y.append(y_filtered)
 
-    print("Shapes after transposing:")
-    print(f"X shape: {X.shape}")  # Expected: [num_trials, len(common_times), n_components]
-    print(f"y shape: {y.shape}")  # Expected: [num_trials, len(common_times), Force]
-    # If y has last dimension of size 1, squeeze it
-    y = y.squeeze(-1)  # Shape: [num_trials, len(common_times)]
-    print("Shape of y after squeezing:")
-    print(f"y shape: {y.shape}")  # Expected: [num_trials, len(common_times)]
-
+    X = np.array(X)  # Shape: (num_trials, len(common_times), n_components)
+    y = np.array(y)  # Shape: (num_trials, len(common_times), 1)
     return X, y
 
-# **Call the prepare_data function to parse the data**
-X, y = prepare_data(saved_data, representation)
+# Define the low-pass filter function
+def apply_lowpass_filter(data, cutoff, fs, order=5):
+    nyquist = 0.5 * fs  # Nyquist frequency is half the sampling rate
+    normal_cutoff = cutoff / nyquist
+    b, a = butter(order, normal_cutoff, btype='low', analog=False)
+    y = filtfilt(b, a, data)
+    return y
 
-# Check if CUDA is available and set the device
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
 
-# Data augmentation function to generate new forward-moving trials from each trial
+# Data Augmentation
 def augment_data(X, y, segment_length, overlap_percentage):
     augmented_X = []
     augmented_y = []
 
     step_size = int(segment_length * (1 - overlap_percentage))
     if step_size <= 0:
-        step_size = 1  # Ensure step_size is at least 1 to avoid infinite loops
+        step_size = 1
 
     num_trials, trial_length, num_features = X.shape
 
+    for trial_idx in range(num_trials):
+        trial_X = X[trial_idx]
+        trial_y = y[trial_idx]
 
-    for i in range(num_trials):
-        trial_X = X[i]
-        trial_y = y[i]
-
-        # Generate segments from this trial
         for start in range(0, trial_length - segment_length + 1, step_size):
             end = start + segment_length
             augmented_X.append(trial_X[start:end, :])
-            augmented_y.append(trial_y[start:end])
+            augmented_y.append(trial_y[start:end, :])
 
-    # Convert lists to NumPy arrays
     augmented_X = np.array(augmented_X)
     augmented_y = np.array(augmented_y)
-    print("After data augmentation:")
-    print(f"augmented_X shape: {augmented_X.shape}")  # Expected: [num_augmented_samples, new_data_length, num_features]
-    print(f"augmented_y shape: {augmented_y.shape}")  # Expected: [num_augmented_samples, new_data_length]
-    print(f"Number of augmented samples: {augmented_X.shape[0]}")
     return augmented_X, augmented_y
 
-# Set parameters for augmentation
-segment_length = 100  # Number of time steps in each snippet
-overlap_percentage = 0.5  # 50% overlap between snippets
+# Model Definitions
+class GRUDecoder(nn.Module):
+    def __init__(self, input_size, hidden_size=100, num_layers=1, dropout=0.0):
+        super(GRUDecoder, self).__init__()
+        self.gru = nn.GRU(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout if num_layers > 1 else 0.0,
+            batch_first=True
+        )
+        self.fc = nn.Linear(hidden_size, 1)
 
-# Augment the data
-augmented_X, augmented_y = augment_data(X, y, segment_length, overlap_percentage)
+    def forward(self, x):
+        out, _ = self.gru(x)
+        out = self.fc(out)
+        return out
 
-# Function for model selection and training with flexible parameters
-def train_decoder(augmented_X, augmented_y, selected_decoders, decoder_params):
+class LSTMDecoder(nn.Module):
+    def __init__(self, input_size, hidden_size=100, num_layers=1, dropout=0.0):
+        super(LSTMDecoder, self).__init__()
+        self.lstm = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout if num_layers > 1 else 0.0,
+            batch_first=True
+        )
+        self.fc = nn.Linear(hidden_size, 1)
+
+    def forward(self, x):
+        out, _ = self.lstm(x)
+        out = self.fc(out)
+        return out
+
+class WienerFilterDecoder(nn.Module):
+    def __init__(self, input_size):
+        super(WienerFilterDecoder, self).__init__()
+        self.linear = nn.Linear(input_size, 1)
+
+    def forward(self, x):
+        batch_size, seq_len, input_size = x.shape
+        x = x.view(-1, input_size)
+        out = self.linear(x)
+        out = out.view(batch_size, seq_len, 1)
+        return out
+
+# Training Function
+def prepare_torch_data(augmented_X, augmented_y, device):
+    X = torch.tensor(augmented_X, dtype=torch.float32).to(device)
+    y = torch.tensor(augmented_y, dtype=torch.float32).to(device)
+    return X, y
+
+def train_decoders(augmented_X, augmented_y, selected_decoders, decoder_params, device='cpu'):
+    from sklearn.model_selection import train_test_split
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        augmented_X, augmented_y, test_size=0.2, random_state=42
+    )
+
+    X_train, y_train = prepare_torch_data(X_train, y_train, device)
+    X_test, y_test = prepare_torch_data(X_test, y_test, device)
+
     models = {}
+    input_size = X_train.shape[2]
+
+    for decoder_name in selected_decoders:
+        params = decoder_params.get(decoder_name, {})
+        if decoder_name == 'wiener':
+            model = WienerFilterDecoder(input_size=input_size).to(device)
+        elif decoder_name == 'gru':
+            model = GRUDecoder(
+                input_size=input_size,
+                hidden_size=params.get('units', 100),
+                num_layers=params.get('num_layers', 1),
+                dropout=params.get('dropout', 0.0)
+            ).to(device)
+        elif decoder_name == 'lstm':
+            model = LSTMDecoder(
+                input_size=input_size,
+                hidden_size=params.get('units', 100),
+                num_layers=params.get('num_layers', 1),
+                dropout=params.get('dropout', 0.0)
+            ).to(device)
+        else:
+            continue
+        models[decoder_name] = model
+
+    criterion = nn.MSELoss()
+
     results = {}
 
-    # Split into training and testing sets
-    total_samples = augmented_X.shape[0]
-    train_size = int(0.8 * total_samples)
-
-    X_train = augmented_X[:train_size]
-    y_train = augmented_y[:train_size]
-    X_test = augmented_X[train_size:]
-    y_test = augmented_y[train_size:]
-
-
-    print(f"augmented_X shape: {X_train.shape}")  # Expected: [num_augmented_samples, new_data_length, num_features]
-    print(f"augmented_y shape: {y_train.shape}") 
-    print(f"augmented_X shape: {X_test.shape}")  # Expected: [num_augmented_samples, new_data_length, num_features]
-    print(f"augmented_y shape: {y_test.shape}") 
-    # Initialize decoders based on selection and user-specified parameters
-    if "wiener" in selected_decoders:
-        models["wiener"] = WienerCascadeDecoder()
-
-    if "gru" in selected_decoders:
-        gru_params = decoder_params.get("gru", {})
-        models["gru"] = GRUDecoder(
-            units=gru_params.get("units", 100),
-            dropout=gru_params.get("dropout", 0),
-            num_epochs=gru_params.get("num_epochs", 1000),
-            verbose=gru_params.get("verbose", 1)
-        )
-
-    if "lstm" in selected_decoders:
-        lstm_params = decoder_params.get("lstm", {})
-        models["lstm"] = LSTMDecoder(
-            units=lstm_params.get("units", 100),
-            dropout=lstm_params.get("dropout", 0.1),
-            num_epochs=lstm_params.get("num_epochs", 10),
-            verbose=lstm_params.get("verbose", 1)
-        )
-
-    # Train each selected model
     for name, model in models.items():
-        print(f"\nTraining {name} decoder with parameters: {decoder_params.get(name, {})}")
+        print(f"\nTraining {name} decoder...")
+        params = decoder_params.get(name, {})
+        num_epochs = params.get('num_epochs', 10)
+        learning_rate = params.get('learning_rate', 0.001)
+        batch_size = params.get('batch_size', 32)
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-        if name == "wiener":
-            # For WienerFilterDecoder, flatten X_train and X_test
-            X_train_flat = X_train.reshape(X_train.shape[0], -1)
-            X_test_flat = X_test.reshape(X_test.shape[0], -1)
-            model.fit(X_train_flat, y_train)
-            predictions = model.predict(X_test_flat)
-        else:
-            model.fit(X_train, y_train)
-            predictions = model.predict(X_test)
+        train_dataset = torch.utils.data.TensorDataset(X_train, y_train)
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, batch_size=batch_size, shuffle=True
+        )
 
-        # **Add print statements to check predictions and actual data**
-        print(f"{name} predictions shape: {predictions.shape}")
-        print(f"{name} actual data shape: {y_test.shape}")
-        print(f"{name} predictions sample values: {predictions[:5]}")
-        print(f"{name} actual data sample values: {y_test[:5]}")
+        model.train()
+        for epoch in range(num_epochs):
+            total_loss = 0.0
+            for X_batch, y_batch in train_loader:
+                optimizer.zero_grad()
+                outputs = model(X_batch)
+                loss = criterion(outputs, y_batch)
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+            avg_loss = total_loss / len(train_loader)
+            print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f}")
+
+        model.eval()
+        with torch.no_grad():
+            predictions = model(X_test)
+            test_loss = criterion(predictions, y_test)
+            print(f"{name} decoder test loss: {test_loss.item():.4f}")
+
+        predictions = predictions.cpu().numpy()
+        y_test_np = y_test.cpu().numpy()
 
         results[name] = {
-            'predictions': predictions,
-            'actual': y_test
+            'predictions': predictions.squeeze(-1),
+            'actual': y_test_np.squeeze(-1)
         }
-        print(f"{name} training complete.")
 
     return results
 
 
-# Specify the decoders to use: 'wiener', 'gru', and/or 'lstm'
-selected_decoders = [ "lstm"]
-
-# Define decoder parameters
-decoder_params = {
-    "gru": {"units": 32, "dropout": 0, "num_epochs": 200, "verbose": 1},
-    "lstm": {"units": 100, "dropout": 0.1, "num_epochs": 100, "verbose": 1}
-}
-
-
-# **Call the train_decoder function to train the models**
-results = train_decoder(augmented_X, augmented_y, selected_decoders, decoder_params)
-
-# Plotting predicted vs actual results for each decoder
-def plot_results(results, samples_per_figure=9):
+# Visualization
+def plot_results_sequence(results, samples_per_figure=9):
     for name, data in results.items():
         predictions = data['predictions']
         actual = data['actual']
@@ -197,7 +229,6 @@ def plot_results(results, samples_per_figure=9):
                 ax.set_ylabel('Force')
                 ax.legend()
 
-            # Hide any unused subplots
             for ax in axes[len(sample_indices):]:
                 ax.axis('off')
 
@@ -206,5 +237,62 @@ def plot_results(results, samples_per_figure=9):
             plt.show()
 
 
-# **Call the plot_results function to visualize the results**
-plot_results(results)
+# Choose representation
+representation = 'PCA'  # or 'UMAP', 't-SNE'
+
+# Set parameters for the low-pass filter
+cutoff_frequency = 10  # Cutoff frequency in Hz
+sampling_rate = 1017.3   # Sampling rate in Hz
+filter_order = 5       # Order of the Butterworth filter
+
+# Prepare data with preprocessing
+X, y = prepare_data(
+    saved_data,
+    representation,
+    cutoff=cutoff_frequency,
+    fs=sampling_rate,
+    order=filter_order
+)
+
+# Choose segment length and overlap percentage
+segment_length = 100 # Segment length in number of time steps
+overlap_percentage = 0.5 # Overlap percentage
+
+# Augment the data
+augmented_X, augmented_y = augment_data(X, y, segment_length, overlap_percentage)
+
+# Decoder Parameters
+decoder_params = {
+    'wiener': {
+        'num_epochs': 10,
+        'learning_rate': 0.001,
+        'batch_size': 32
+    },
+    'gru': {
+        'units': 100,
+        'num_layers': 1,
+        'dropout': 0.1,
+        'num_epochs': 10,
+        'learning_rate': 0.001,
+        'batch_size': 32
+    },
+    'lstm': {
+        'units': 100,
+        'num_layers': 1,
+        'dropout': 0.1,
+        'num_epochs': 10,
+        'learning_rate': 0.001,
+        'batch_size': 32
+    }
+}
+
+# Determine the device
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Using device: {device}")
+
+# Train Decoders
+selected_decoders = ['wiener', 'gru', 'lstm']
+results = train_decoders(augmented_X, augmented_y, selected_decoders, decoder_params, device=device)
+
+# Plot the results
+plot_results_sequence(results)
