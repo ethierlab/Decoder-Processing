@@ -438,10 +438,11 @@ if __name__ == "__main__":
             print(f"t-SNE failed: {e}")
     try:
         # Extract 'Force' data
+        force_fs = 1017.3
         force_data = tdt_signals['Levier']  # Shape: (N,)
 
         # Create time axis for 'Force' data
-        force_times = np.linspace(0, duration, num=len(force_data))
+        force_times = np.arange(len(force_data)) / force_fs
 
         # Extract per-trial 'Force' data
         force_trial_data = extract_continuous_data_per_trial(

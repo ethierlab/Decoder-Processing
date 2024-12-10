@@ -30,4 +30,3 @@ file_paths = ['kinematics.pkl', 'tdt_signals.pkl','projected_data_test.pkl']
 
 for file_path in file_paths:
     print_dict_keys(file_path)
-
