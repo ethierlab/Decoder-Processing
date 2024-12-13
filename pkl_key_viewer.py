@@ -26,7 +26,7 @@ def print_dict_keys(pkl_file_path, level=0):
     print("\n" + "="*50 + "\n")
 
 # Example usage with all files
-file_paths = ['kinematics.pkl', 'tdt_signals.pkl','projected_data_test.pkl']
+file_paths = ['Jango_dataset.pkl','projected_data_test.pkl']
 
 for file_path in file_paths:
     print_dict_keys(file_path)

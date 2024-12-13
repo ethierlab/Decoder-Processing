@@ -305,12 +305,12 @@ def compute_component_mean_std(trial_data, pcs_to_average):
 # Main code
 if __name__ == "__main__":
     pkl_file = 'experiment_data.pkl'
-    tdt_file = 'tdt_signals.pkl'
+    tdt_file = 'force.pkl'
 
     data = load_data(pkl_file)
     data_dict = data['data']
     tdt_signals = load_data(tdt_file)
-    t_0_times = tdt_signals['Event Time']
+    t_0_times = pkl_file['Event Time']
 
     unit_selection = 'unit2'
     spike_times_dict = extract_spike_times(data_dict, unit_selection)
@@ -439,7 +439,7 @@ if __name__ == "__main__":
     try:
         # Extract 'Force' data
         force_fs = 1017.3
-        force_data = tdt_signals['Levier']  # Shape: (N,)
+        force_data = tdt_signals['x']  # Shape: (N,)
 
         # Create time axis for 'Force' data
         force_times = np.arange(len(force_data)) / force_fs
