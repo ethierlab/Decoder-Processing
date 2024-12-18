@@ -12,6 +12,7 @@ from scipy.signal import butter, filtfilt
 # Parameters
 #######################################
 file_path = 'Jango_dataset.pkl'
+# file_path = 'projected_data_test.pkl'
 N = 16       # Number of PCA components
 k = 16       # Lag length
 hidden_dim = 64
@@ -34,20 +35,15 @@ def apply_lowpass_filter(data, cutoff, fs, order=5):
     y = filtfilt(b, a, data)
     return y
 
-def create_lagged_data(X, Y, k):
+def create_lagged_data(X, k):
     # X: (T, N), Y: (T,)
     # Returns lagged_X: (T-k, k*N), lagged_Y: (T-k,)
     T, N = X.shape
     if T <= k:
         raise ValueError("T must be greater than k")
-    
-    lagged_X = []
-    lagged_Y = []
-    for t in range(k, T):
-        window = X[t-k:t, :]  # shape: (k, N)
-        lagged_X.append(window.flatten())  # (k*N,)
-        lagged_Y.append(Y[t])
-    return np.array(lagged_X, dtype=np.float32), np.array(lagged_Y, dtype=np.float32)
+
+    lagged_X = np.array([X[t - k:t].flatten() for t in range(k, T)], dtype=np.float32)
+    return lagged_X
 
 #######################################
 # Step 1: Load Data
@@ -55,27 +51,19 @@ def create_lagged_data(X, Y, k):
 with open(file_path, 'rb') as f:
     data = pickle.load(f)
 
-trial_keys = sorted(data['PCA'].keys())
-
 #######################################
 # Step 2: Concatenate All Trials
 #######################################
-X_list = []
-Y_list = []
-for key in trial_keys:
-    X_trial = data['PCA'][key]  # shape: (N_components, time)
-    Y_trial = data['Force']['x'][key]
-    print(Y_trial)  # shape: (1, time)
-    X_list.append(X_trial[:N, :])  # Ensure we only take first N components
-    Y_list.append(Y_trial)
 
-X_concat = np.hstack(X_list)    # (N, total_time)
-Y_concat = np.hstack(Y_list)    # (1, total_time)
+# Concatenate PCA components into a TxN array (T: time steps, N: features)
+X = np.hstack([data['PCA'][key] for key in sorted(data['PCA'].keys())])
+X = X[:N, :].T
 
-X_concat = X_concat.T           # (T, N)
-Y_concat = Y_concat.squeeze()   # (T,)
+# Concatenate force data into a Tx1 array
+Y_force = np.hstack([data['Force']['x'][key] for key in sorted(data['Force']['x'].keys())]).T
 
-print("X shape:", X_concat.shape, "Y shape:", Y_concat.shape)
+
+print("X shape:", X.shape, "Y shape:", Y_force.shape)
 # Example: X shape: (19232, 16), Y shape: (19232,)
 
 #######################################
@@ -83,20 +71,23 @@ print("X shape:", X_concat.shape, "Y shape:", Y_concat.shape)
 #######################################
 # Apply low-pass filter to Y before normalization
 # Convert to grams
-Y_filtered = apply_lowpass_filter(Y_concat, cutoff, fs, order=order)
-Y_filtered = (Y_filtered - 294) * 1.95  # Convert to grams if desired
+# Y_filtered = apply_lowpass_filter(Y_force, cutoff, fs, order=order)
+# Y_filtered = (Y_filtered - 294) * 1.95  # Convert to grams if desired
 
 #######################################
 # Step 4: Z-score Normalization
 #######################################
-X_zscored = zscore(X_concat, axis=0)
-Y_zscored = zscore(Y_filtered, axis=0)
+X_zscored = zscore(X, axis=0)
+Y_zscored = zscore(Y_force, axis=0)
+# Y_zscored = zscore(Y_filtered, axis=0)
 
 #######################################
 # Step 5: Create Lagged Data
 #######################################
-lagged_X_np, lagged_Y_np = create_lagged_data(X_zscored, Y_zscored, k)
+lagged_X_np = create_lagged_data(X_zscored, k)
+lagged_Y_np = Y_force[k:].squeeze()
 print("Lagged X shape:", lagged_X_np.shape, "Lagged Y shape:", lagged_Y_np.shape)
+
 
 #######################################
 # Step 6: Convert to Tensors and DataLoader
@@ -114,7 +105,7 @@ class TimeLaggedNonLinearOutputModel(nn.Module):
     def __init__(self, input_dim, hidden_dim=64):
         super().__init__()
         self.hidden_layer = nn.Linear(input_dim, hidden_dim)
-        self.activation = nn.Tanh()
+        self.activation = nn.ReLU()
         self.output_layer = nn.Linear(hidden_dim, 1)
 
     def forward(self, x):
