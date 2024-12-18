@@ -7,21 +7,23 @@ from scipy.stats import zscore
 import matplotlib.pyplot as plt
 from torch.utils.data import TensorDataset, DataLoader
 from scipy.signal import butter, filtfilt
-from sklearn.model_selection import train_test_split
+import os
+
 #######################################
 # Parameters
 #######################################
 file_path = 'Jango_dataset.pkl'
-# file_path = 'projected_data_test.pkl'
-N = 16       # Number of components
-representation = 'PCA'
+N = 16          # Number of PCA components
+k = 16          # Lag length (sequence length)
+hidden_dim = 64
+num_epochs = 500
 batch_size = 64
+learning_rate = 0.001
 
-
-# Filtering parameters
-cutoff = 10    # cutoff frequency in Hz
-fs = 1000       # sampling frequency in Hz
-order = 5       # order of the Butterworth filter
+# Filtering parameters (optional)
+cutoff = 10    # Cutoff frequency in Hz
+fs = 1000      # Sampling frequency in Hz
+order = 5      # Order of the Butterworth filter
 
 #######################################
 # Functions
@@ -33,176 +35,223 @@ def apply_lowpass_filter(data, cutoff, fs, order=5):
     y = filtfilt(b, a, data)
     return y
 
-# def create_sliding_windows(X, Y, window_size, step):
-#     # X, Y: (num_trials, T, input_dim/output_dim)
-#     windows_X = []
-#     windows_Y = []
-#     for trial_idx in range(X.shape[0]):
-#         T = X.shape[1]
-#         for start in range(0, T - window_size + 1, step):
-#             end = start + window_size
-#             windows_X.append(X[trial_idx, start:end, :])
-#             windows_Y.append(Y[trial_idx, start:end, :])
+def create_lagged_data(X, Y=None, k=None):
+    """
+    Create sliding windows of past 'k' time steps.
+    X: (num_trials, T, N)  → Input features
+    Y: (num_trials, T) or None → Target outputs (optional)
+    k:                     → Number of past steps to include
+    Returns:
+        X_lagged: (total_windows, k, N)
+        Y_lagged: (total_windows,) or None if Y is None
+    """
+    X_lagged = []
+    Y_lagged = [] if Y is not None else None
 
-#     # Convert to arrays
-#     return np.array(windows_X), np.array(windows_Y)
+    for trial in range(X.shape[0]):
+        T = X.shape[1]
+        for t in range(k, T):
+            X_lagged.append(X[trial, t-k:t, :])  # Past k steps
+            if Y is not None:
+                Y_lagged.append(Y[trial, t])     # Predict current step
+
+    X_lagged = np.array(X_lagged)
+    if Y is not None:
+        Y_lagged = np.array(Y_lagged)
+    return X_lagged, Y_lagged
 
 #######################################
-# Load Data
+# Step 1: Load Data
 #######################################
 with open(file_path, 'rb') as f:
     data = pickle.load(f)
 
-trials = data[representation]
-force_trials = data['Force']['x'] # Add ['x'] or ['y'] for Jango dataset
-trial_indices = sorted(trials.keys())
+# Extract PCA components and force data
+trials = sorted(data['PCA'].keys())
+X = np.stack([data['PCA'][trial][:N].T for trial in trials])  # Shape: (num_trials, T, N)
+Y = np.stack([data['Force']['x'][trial] for trial in trials])  # Shape: (num_trials, T)
 
-X = []
-y = []
-for idx in trial_indices:
-    X_trial = trials[idx][:N]
-    y_trial = force_trials[idx]
-
-    X.append(X_trial)
-    y.append(y_trial)
-X = np.array(X)
-y = np.array(y)
-print("X shape:", X.shape, "Y shape:", y.shape)
-#######################################
-#Z-score Normalization
-#######################################
-X_zscored = np.array([zscore(trial, axis=1) for trial in X])
-Y_zscored = np.array([zscore(trial) for trial in y])
-# Y_zscored = zscore(Y_filtered, axis=0)
+print("Original X shape:", X.shape, "Original Y shape:", Y.shape)
 
 #######################################
-#Z-score Split Data into Train/Test
+# Step 2: Filter and Normalize Data (Optional filtering)
 #######################################
+# Y_filtered = np.array([apply_lowpass_filter(y, cutoff, fs, order) for y in Y])
 
-X_train, X_test, y_train, y_test = train_test_split(
-        X_zscored, Y_zscored, test_size=0.2, random_state=42, shuffle=False
-    )
-print("X_train shape:", X_train.shape, "Y_train shape:", y_train.shape)
-print("X_test shape:", X_test.shape, "Y_test shape:", y_test.shape)
-
-#######################################
-# Convert to Tensors and DataLoader
-#######################################
-X_train = torch.tensor(X_train, dtype=torch.float32)
-y_train = torch.tensor(y_train, dtype=torch.float32).unsqueeze(-1)  
-X_test = torch.tensor(X_test, dtype=torch.float32)
-y_test = torch.tensor(y_test, dtype=torch.float32).unsqueeze(-1)  
-
-X_train = X_train.permute(0, 2, 1)  # (batch_size, T, N_component)
-X_test = X_test.permute(0, 2, 1)  # (batch_size, T, N_component)
-print("X_train tensor shape:", X_train.shape, "Y_train tensor shape:", y_train.shape)
-print("X_test  tensor shape:", X_test.shape, "Y_test tensor shape:", y_test.shape)
-
-# small_X = X_train[:10]
-# small_Y = y_train[:10]
-
-dataset = TensorDataset(X_train, y_train)
-# dataset = TensorDataset(small_X, small_Y)
-dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-
+# Z-score normalization
+X_zscored = zscore(X, axis=(0, 1))
+Y_zscored = zscore(Y, axis=(0, 1)) # or Y_filtered if you used filtering
 
 #######################################
-# Define the Model
+# Step 3: Split data by trials before lagging
+# This ensures entire trials remain intact for testing
+#######################################
+num_trials = X_zscored.shape[0]
+num_train = int(num_trials * 0.8)  # 80% train, 20% test
+X_train_raw = X_zscored[:num_train]
+Y_train_raw = Y_zscored[:num_train]
+X_test_raw = X_zscored[num_train:]
+Y_test_raw = Y_zscored[num_train:]
+
+print("Train trials shape:", X_train_raw.shape, "Test trials shape:", X_test_raw.shape)
+
+#######################################
+# Step 4: Create Lagged Data from the raw sets
+#######################################
+X_train_lagged, Y_train_lagged = create_lagged_data(X_train_raw, Y_train_raw, k=k)
+X_test_lagged, Y_test_lagged = create_lagged_data(X_test_raw, Y_test_raw, k=k)
+
+print("Lagged X_train shape:", X_train_lagged.shape, "Lagged Y_train shape:", Y_train_lagged.shape)
+print("Lagged X_test shape:", X_test_lagged.shape, "Lagged Y_test shape:", Y_test_lagged.shape)
+
+#######################################
+# Step 5: Convert to Tensors and DataLoader
+#######################################
+X_train_t = torch.tensor(X_train_lagged, dtype=torch.float32)
+Y_train_t = torch.tensor(Y_train_lagged, dtype=torch.float32).unsqueeze(-1)
+
+X_test_t = torch.tensor(X_test_lagged, dtype=torch.float32)
+Y_test_t = torch.tensor(Y_test_lagged, dtype=torch.float32).unsqueeze(-1)
+
+train_dataset = TensorDataset(X_train_t, Y_train_t)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+test_dataset = TensorDataset(X_test_t, Y_test_t)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+#######################################
+# Step 6: Define the GRU Model
 #######################################
 class GRUModel(nn.Module):
-    def __init__(self, input_size, hidden_size, num_layers, dropout=0.0):
+    def __init__(self, input_size, hidden_size, num_layers):
         super(GRUModel, self).__init__()
-        self.gru = nn.GRU(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            dropout=dropout if num_layers > 1 else 0.0,
-            batch_first=True
-        )
-        self.fc = nn.Linear(hidden_size, 1)
+        self.gru = nn.GRU(input_size, hidden_size, num_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_size, 1)  # Predict single output
 
     def forward(self, x):
-        out, _ = self.gru(x)  # (batch, seq, hidden)
-        out = torch.relu(out)
-        out = self.fc(out)
+        out, _ = self.gru(x)    # out: (batch_size, seq_len, hidden_size)
+        out = out[:, -1, :]     # Take the last time step's output
+        out = self.fc(out)      
         return out
 
-
-hidden_dim = 64
-num_epochs = 500
-
-learning_rate = 1e-4
-input_dim = X_train.shape[2]
-num_layers = 1
-model = GRUModel(input_dim, hidden_dim, num_layers)
+input_dim = X_train_t.shape[2]
+model = GRUModel(input_dim, hidden_dim, num_layers=1)
 criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=1.5)
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model.to(device)
 print('Using device:', device)
 
 #######################################
-# Step 8: Train the Model
+# Step 7: Train the Model
 #######################################
 model.train()
+losses = []
 
-# Initialize a list to store gradient norms
-gradient_norms = []
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=50, factor=0.1)
-for epoch in range(num_epochs): 
-    for batch_X, batch_Y in dataloader:
-        # batch_X Should be (batch_size, window_size, input_dim)
-        # batch_Y Should be (batch_size, window_size, 1)
-        # print("Batch_Y Mean:", batch_Y.mean().item())
-        # print("Batch_Y Std:", batch_Y.std().item())
+for epoch in range(num_epochs):
+    epoch_loss = 0.0
+    for batch_X, batch_Y in train_loader:
+        batch_X, batch_Y = batch_X.to(device), batch_Y.to(device)
+        
+        # Forward pass
         predictions = model(batch_X)
         loss = criterion(predictions, batch_Y)
+
+        # Backward pass
         optimizer.zero_grad()
         loss.backward()
-        # Compute gradient norms
-        total_norm = 0.0
-        for param in model.parameters():
-            if param.grad is not None:
-                param_norm = param.grad.data.norm(2)  # L2 norm of the gradient
-                total_norm += param_norm.item() ** 2
-        total_norm = total_norm ** 0.5  # Take the square root to get the L2 norm
-        gradient_norms.append(total_norm)  # Store the gradient norm
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Optional gradient clipping
         optimizer.step()
+
+        epoch_loss += loss.item()
+    
+    epoch_loss /= len(train_loader)
+    losses.append(epoch_loss)
     if (epoch + 1) % 50 == 0:
-        for param_group in optimizer.param_groups:
-            print(f"Current Learning Rate: {param_group['lr']}")
-        for name, param in model.named_parameters():
-            print(f"{name}: Mean of weights: {param.data.mean():.4f}, Gradient Norm: {param.grad.norm() if param.grad is not None else 'No gradient'}")
-        print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}")
+        print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {epoch_loss:.4f}")
+
 print("Training completed.")
 
+#######################################
+# Step 8: Save the model so you don't have to retrain every time
+#######################################
+# Save model state_dict
+torch.save(model.state_dict(), 'model_weights.pth')
+print("Model weights saved to model_weights.pth.")
+
+# Optionally, save a full checkpoint with optimizer state
+checkpoint = {
+    'model_state_dict': model.state_dict(),
+    'optimizer_state_dict': optimizer.state_dict(),
+    'epoch': num_epochs,
+    'loss': losses[-1]
+}
+torch.save(checkpoint, 'checkpoint.pth')
+print("Full checkpoint saved to checkpoint.pth.")
 
 #######################################
-# Step 9: Evaluate and Plot
+# Step 9: Evaluate on the Test Set
 #######################################
 model.eval()
+test_loss = 0.0
 with torch.no_grad():
-    pred = model(X_train).detach().cpu().numpy()
-# print(pred.shape)
-# print(pred)
-plot_length = 1000
+    for batch_X, batch_Y in test_loader:
+        batch_X, batch_Y = batch_X.to(device), batch_Y.to(device)
+        predictions = model(batch_X)
+        loss = criterion(predictions, batch_Y)
+        test_loss += loss.item()
+test_loss /= len(test_loader)
+print(f"Test Loss: {test_loss:.4f}")
+
+#######################################
+# Step 10: Visualize Results for a Single Test Trial
+#######################################
+# Let's pick the first test trial (trial_idx=0 in test set)
+trial_idx = 0
+trial_X = X_test_raw[trial_idx]  # Shape: (T, N)
+trial_Y = Y_test_raw[trial_idx]  # Shape: (T,)
+
+# Re-create lagged data for this single test trial
+trial_X_lagged, trial_Y_lagged = create_lagged_data(trial_X[np.newaxis,:,:], 
+                                                    trial_Y[np.newaxis,:], 
+                                                    k=k)
+trial_X_tensor = torch.tensor(trial_X_lagged, dtype=torch.float32).to(device)
+
+model.eval()
+with torch.no_grad():
+    trial_pred = model(trial_X_tensor).cpu().numpy().flatten()
+
+# Align predictions to the original trial length
+aligned_pred = np.zeros_like(trial_Y)
+aligned_pred[k:] = trial_pred
+
+# Plot actual vs predicted force (Z-scored units)
 plt.figure(figsize=(12, 6))
-plt.plot(y[0], label="Actual", linestyle='-', alpha=0.7)
-plt.plot(pred[0], label="Predicted", linestyle='--', alpha=0.7)  # Predicted force signal
-plt.xlabel("Time Steps (after lagging)")
-plt.ylabel("Z-scored (Filtered & Converted) Force")
-plt.title("Actual vs. Predicted Force (Filtered)")
+plt.plot(trial_Y, label="Actual Force (Z-scored)")
+plt.plot(aligned_pred, label="Predicted Force (Model)")
+plt.xlabel("Time Steps")
+plt.ylabel("Force (Z-scored)")
+plt.title(f"Test Trial {trial_idx + 1}: Actual vs Predicted Force")
 plt.legend()
 plt.tight_layout()
 plt.show()
 
-# Plot gradient norms
-plt.figure(figsize=(10, 6))
-plt.plot(gradient_norms, label="Gradient Norms")
-plt.xlabel("Training Steps")
-plt.ylabel("Gradient Norm (L2)")
-plt.title("Gradient Norms During Training")
+# Also plot training loss
+plt.figure(figsize=(10, 5))
+plt.plot(losses, label="Training Loss")
+plt.xlabel("Epochs")
+plt.ylabel("Loss")
+plt.title("Training Loss Over Epochs")
 plt.legend()
 plt.grid(True)
 plt.show()
+
+#######################################
+# Step 11: Loading the Model Later (Example)
+#######################################
+# If later you want to load the model without retraining:
+# model = GRUModel(input_dim, hidden_dim, num_layers=1)
+# model.load_state_dict(torch.load('model_weights.pth', map_location=device))
+# model.to(device)
+# model.eval()
+# # Now you can run model predictions without retraining.
