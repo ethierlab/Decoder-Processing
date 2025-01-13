@@ -144,7 +144,7 @@ model.eval()
 with torch.no_grad():
     pred = model(lagged_X).squeeze().detach().numpy()
 
-plot_length = 1000
+plot_length = -1
 plt.figure(figsize=(12, 6))
 plt.plot(lagged_Y_np[:plot_length], label="Actual", linestyle='-', alpha=0.7)
 plt.plot(pred[:plot_length], label="Predicted", linestyle='--', alpha=0.7)
