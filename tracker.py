@@ -2,8 +2,8 @@ import pickle
 import time
 import os
 
-output_file = 'experiment_results_lstm.pkl'
-
+output_file = 'experiment_results2.pkl'
+# output_file = 'experiment_results_lstm.pkl'
 def load_results(file_path):
     if os.path.exists(file_path):
         with open(file_path, 'rb') as f:
@@ -12,7 +12,7 @@ def load_results(file_path):
     else:
         print(f"{file_path} does not exist yet.")
         return []
-
+# print (load_results(output_file))
 def display_latest_results(results, num=5):
     if not results:
         print("No results to display.")

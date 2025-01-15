@@ -2,13 +2,14 @@ import pickle
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # Needed for 3D plotting in matplotlib
 
-output_file = 'experiment_results1.pkl'
+output_file = 'experiment_results2.pkl'
 
-def compute_score(exp, alpha=1.0, beta=1.0, gamma=1.0):
+def compute_score(exp, alpha=1.0, beta=1.0, gamma=1.0, eta=0):
     loss = exp['test_loss']
     r2   = exp['R2']
     vaf  = exp['VAF']
-    score = alpha * (1 - loss) + beta * r2 + gamma * vaf
+    params = exp['num_params']
+    score = alpha * (1 - loss) + beta * r2 + gamma * vaf + eta * params
     return score
 
 def main():
@@ -23,7 +24,7 @@ def main():
     colors = []  # e.g., hidden_dim
     
     # Adjust these weights as you like
-    alpha, beta, gamma = 1.0, 1.0, 1.0
+    alpha, beta, gamma, eta = 0, 0, 1.0, -0.01
     
     for exp in results:
         N = exp['N']
@@ -31,7 +32,7 @@ def main():
         hidden_dim = exp['hidden_dim']
         
         # Compute the score
-        sc = compute_score(exp, alpha=alpha, beta=beta, gamma=gamma)
+        sc = compute_score(exp, alpha=alpha, beta=beta, gamma=gamma, eta=eta)
         
         X.append(N)
         Y.append(k)
