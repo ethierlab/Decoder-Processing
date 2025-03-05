@@ -19,7 +19,7 @@ from random import sample
 ###############################################################################
 
 COMBINED_PICKLE_FILE = (
-    "C:/Users/Ethier Lab/Documents/GitHub/Decoder-Processing/DataSET/Spike_ISO_2012/combined.pkl"
+    "C:/Users/Ethier Lab/Documents/GitHub/Decoder-Processing/DataSET/Jango_ISO_2015/combined.pkl"
 )
 
 SHOW_GRAPHS = True
@@ -42,7 +42,7 @@ LINEAR_N_PCA = 18
 LIGRU_N_PCA  = 14
 
 # RNN/Linear hidden dims & lag
-GRU_HIDDEN_DIM    = 5
+GRU_HIDDEN_DIM    = 8
 GRU_K_LAG         = 16
 
 LSTM_HIDDEN_DIM   = 16
@@ -54,7 +54,8 @@ LINEAR_K_LAG      = 16
 LIGRU_HIDDEN_DIM  = 5
 LIGRU_K_LAG       = 16
 
-NUM_EPOCHS = 400
+# Training info
+NUM_EPOCHS = 300
 BATCH_SIZE = 64
 LEARNING_RATE = 0.001
 
@@ -66,9 +67,15 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 TRAIN_TRIAL_BASED = False  # If True => trial slicing; If False => continuous approach
 
 ###############################################################################
-#   Option to re-calc PCA each day
+#   Option for PCA 
 ###############################################################################
-RECALC_PCA_EACH_DAY = False
+RECALC_PCA_EACH_DAY = True
+
+APPLY_ZSCORE = False  # If True, do z-score (leads to correlation-based PCA).
+                      # If False, do a raw covariance-based PCA (only mean-centering).
+
+
+REALIGN_PCA_TO_DAY0 = True # Toggle whether to realign each day's PCA back to Day0
 
 ###############################################################################
 #                         1) SEED SETTER
@@ -239,7 +246,17 @@ def build_continuous_dataset(df, bin_factor, bin_size, smoothing_length):
         else:
             force_arr = np.array(ds_force)
 
-        all_spike_list.append(ds_spike_df.values)
+        # -- Smoothing
+        sm = smooth_spike_data(ds_spike_df.values, bin_size, smoothing_length)
+
+        # -- Z-score
+        if APPLY_ZSCORE:
+            final_spikes = safe_zscore(sm, axis=0)
+        else:
+            # final_spikes = sm
+            final_spikes = sm - sm.mean(axis=0)
+
+        all_spike_list.append(final_spikes)
         all_force_list.append(force_arr)
 
     if len(all_spike_list) == 0:
@@ -247,8 +264,7 @@ def build_continuous_dataset(df, bin_factor, bin_size, smoothing_length):
     big_spike_arr = np.concatenate(all_spike_list, axis=0)
     big_force_arr = np.concatenate(all_force_list, axis=0)
 
-    big_spike_smooth = smooth_spike_data(big_spike_arr, bin_size, smoothing_length)
-    return big_spike_smooth, big_force_arr
+    return big_spike_arr, big_force_arr
 
 ###############################################################################
 #       5) DATASET BUILDERS FOR RNN/LINEAR
@@ -437,7 +453,7 @@ def plot_continuous_random_segments(day_label, all_true, pred_gru, pred_lstm, pr
         ax.set_title(f"Day={day_label}, segment={start_idx}:{end_idx}")
         ax.legend(fontsize=8)
         ax.set_xlabel("Time (samples)")
-        ax.set_ylabel("Force (z-score)")
+        ax.set_ylabel("Force (z-score)" if APPLY_ZSCORE else "Force (raw)")
     plt.tight_layout()
     plt.show()
 
@@ -485,7 +501,10 @@ def plot_trial_random_samples(day_label, X_all_list, Y_all_list,
         ax.plot(time_axis, ligru_pred, label=f"LiGRU(VAF={vaf_ligru:.2f})", linestyle='-.')
         ax.set_title(f"Day={day_label}, trial={trial_idx}")
         ax.set_xlabel("Time (bins)")
-        ax.set_ylabel("Force (z-scored)")
+        if APPLY_ZSCORE:
+            ax.set_ylabel("Force (z-scored)")
+        else:
+            ax.set_ylabel("Force (raw)")
         ax.legend(fontsize=8)
 
     plt.tight_layout()
@@ -499,8 +518,8 @@ def gather_day_spike_data_for_pca(day_df):
     If you are in TRIAL mode, gather *all trials’ spike data*
     If in CONTINUOUS mode, gather data by the continuous method.
 
-    Returns a single 2D numpy array [T x Channels] after smoothing + zscoring,
-    so we can fit a PCA if needed.
+    Returns a single 2D numpy array [T x Channels] after smoothing,
+    optionally zscoring, so we can fit a PCA if needed.
     """
     if TRAIN_TRIAL_BASED:
         # For trial-based, we gather each row, downsample, just like build_trial_based_dataset,
@@ -513,24 +532,41 @@ def gather_day_spike_data_for_pca(day_df):
             ds_spike_df, _ = downsample_spike_and_force(spike_df, row["force"], BIN_FACTOR)
             if ds_spike_df.shape[0] == 0:
                 continue
-            # smooth + zscore
+
             sm = smooth_spike_data(ds_spike_df.values,
                                    bin_size=BIN_SIZE*BIN_FACTOR,
                                    smoothing_length=SMOOTHING_LENGTH)
-            z  = safe_zscore(sm, axis=0)
-            all_spikes.append(z)
+
+            if APPLY_ZSCORE:
+                z  = safe_zscore(sm, axis=0)
+                all_spikes.append(z)
+            else:
+                # Possibly just do mean-centering or nothing
+                all_spikes.append(sm)
+
         if len(all_spikes) == 0:
             return np.empty((0,0))
         return np.concatenate(all_spikes, axis=0)
 
     else:
-        # For continuous approach:
-        big_spike_smooth, _ = build_continuous_dataset(day_df, BIN_FACTOR, BIN_SIZE, SMOOTHING_LENGTH)
-        if big_spike_smooth.shape[0] == 0:
-            return np.empty((0,0))
-        z  = safe_zscore(big_spike_smooth, axis=0)
-        return z
+        # For continuous approach, just call build_continuous_dataset.
+        big_spike_arr, _ = build_continuous_dataset(day_df, BIN_FACTOR, BIN_SIZE, SMOOTHING_LENGTH)
+        # build_continuous_dataset already did smoothing + optional zscore
+        # so we can just return it:
+        return big_spike_arr
 
+###############################################################################
+#   PCA alignment: compute rotation R
+###############################################################################
+def compute_alignment_matrix(V_dayD, V_day0):
+    """
+    V_dayD: p x p matrix from dayD's PCA (all principal comps)
+    V_day0: p x p matrix from day0's PCA (all principal comps)
+
+    We assume these are orthonormal bases. Then R = V_dayD @ V_day0.T
+    If not orthonormal, do R = V_dayD @ pinv(V_day0).
+    """
+    return V_dayD @ V_day0.T
 
 ###############################################################################
 #       9) MAIN SCRIPT
@@ -551,39 +587,43 @@ def main():
         print("[ERROR] No days found in combined_df!")
         return
 
-    day1 = unique_days[0]
-    test_days = [d for d in unique_days]  # We'll evaluate *all* days, including day1
+    # We'll pick the first day as "Day0" (some code uses day1 naming)
+    day0 = unique_days[0]
+    test_days = [d for d in unique_days]  # We'll evaluate on all days
     print("[DEBUG] unique_days =>", unique_days)
-    print("[DEBUG] day1 =>", day1)
+    print("[DEBUG] day0 =>", day0)
 
-    #--- Build train_df as day1 data & gather PCA (unless we recalc each day).
-    train_df = combined_df[combined_df["date"] == day1].reset_index(drop=True)
+    #--- Build train_df as day0 data & gather PCA
+    train_df = combined_df[combined_df["date"] == day0].reset_index(drop=True)
     print(f"[DEBUG] train_df shape={train_df.shape}")
 
-    # Gather day1 spike data for PCA
+    # Gather day0 spike data
     max_dim = max(GRU_N_PCA, LSTM_N_PCA, LINEAR_N_PCA, LIGRU_N_PCA)
+    from sklearn.decomposition import PCA
     pca_model = None
     if REDUCTION_METHOD.upper() == "PCA":
-        print(f"[DEBUG] Fitting PCA n_components={max_dim} on day1 ...")
-        # gather day1 spikes
-        day1_z = gather_day_spike_data_for_pca(train_df)
-        if day1_z.shape[0] == 0:
-            print("[ERROR] No valid spike data in day1 after smoothing/zscore!")
+        print(f"[DEBUG] Fitting PCA n_components={max_dim} on day0 ...")
+        day0_data = gather_day_spike_data_for_pca(train_df)
+        if day0_data.shape[0] == 0:
+            print("[ERROR] No valid spike data in day0 after smoothing!")
             return
-        from sklearn.decomposition import PCA
+
         pca_model = PCA(n_components=max_dim, random_state=SEED)
-        pca_model.fit(day1_z)
+        pca_model.fit(day0_data)
     else:
         print("[DEBUG] Not applying PCA (REDUCTION_METHOD != 'PCA')")
 
+    global global_pca_model
+    global_pca_model = pca_model
+
     ###########################################################################
-    # 2) Build training set using day1
+    # 2) Build training set using day0
     ###########################################################################
     def build_dayX_decoder_data(df, day_pca_model, n_pca, seq_len, is_linear=False):
         """
         Build the final X, Y arrays for a single day (df).
-        That day could be day1 (training) or dayN (if we wanted to re-train).
-        But here we just use it for day1 training.
+        Possibly trial-based or continuous approach.
+        Then reduce dimension with day_pca_model if PCA is used.
         """
         if TRAIN_TRIAL_BASED:
             # trial-based
@@ -591,62 +631,65 @@ def main():
                 df, BIN_FACTOR, BIN_SIZE*BIN_FACTOR, SMOOTHING_LENGTH,
                 PRE_TRIAL, POST_TRIAL, SAMPLING_RATE
             )
-            # transform each trial
+            # smoothing + zscore/no-zscore inside a loop
             X_out, Y_out = [], []
             for X_trial, Y_trial in zip(X_list, Y_list):
                 if X_trial.shape[0] == 0:
                     continue
-                # smooth + zscore
-                sm = smooth_spike_data(X_trial, bin_size=BIN_SIZE*BIN_FACTOR,
+                sm = smooth_spike_data(X_trial,
+                                       bin_size=BIN_SIZE*BIN_FACTOR,
                                        smoothing_length=SMOOTHING_LENGTH)
-                z  = safe_zscore(sm, axis=0)
+
+                if APPLY_ZSCORE:
+                    z  = safe_zscore(sm, axis=0)
+                else:
+                    z  = sm
+
                 # PCA if specified
                 if day_pca_model is not None:
                     full_proj = day_pca_model.transform(z)
                     X_pca = full_proj[:, :n_pca]
                 else:
                     X_pca = z[:, :n_pca]
+
                 X_out.append(X_pca)
                 Y_out.append(Y_trial)
 
             if not is_linear:
-                # RNN
                 X_arr, Y_arr = create_rnn_dataset(X_out, Y_out, seq_len)
             else:
-                # linear
                 X_arr, Y_arr = create_linear_dataset(X_out, Y_out, seq_len)
             return X_arr, Y_arr
 
         else:
             # continuous
-            big_spike_smooth, big_force_arr = build_continuous_dataset(
+            big_spike_arr, big_force_arr = build_continuous_dataset(
                 df, BIN_FACTOR, BIN_SIZE, SMOOTHING_LENGTH
             )
-            if big_spike_smooth.shape[0] == 0:
+            if big_spike_arr.shape[0] == 0:
                 return np.empty((0,0)), np.empty((0,))
-            z  = safe_zscore(big_spike_smooth, axis=0)
+            # big_spike_arr has already been smoothed (+ zscored if APPLY_ZSCORE).
             if day_pca_model is not None:
-                z_full = day_pca_model.transform(z)
+                z_full = day_pca_model.transform(big_spike_arr)
             else:
-                z_full = z
-            # slice the correct # of pca dims
+                z_full = big_spike_arr
             X_pca = z_full[:, :n_pca]
+
             if not is_linear:
                 X_arr, Y_arr = create_rnn_dataset_continuous(X_pca, big_force_arr, seq_len)
             else:
                 X_arr, Y_arr = create_linear_dataset_continuous(X_pca, big_force_arr, seq_len)
             return X_arr, Y_arr
 
-    # Build training sets for day1
     X_gru_train,   Y_gru_train   = build_dayX_decoder_data(train_df, pca_model, GRU_N_PCA,   GRU_K_LAG,   is_linear=False)
     X_lstm_train,  Y_lstm_train  = build_dayX_decoder_data(train_df, pca_model, LSTM_N_PCA,  LSTM_K_LAG,  is_linear=False)
     X_lin_train,   Y_lin_train   = build_dayX_decoder_data(train_df, pca_model, LINEAR_N_PCA,LINEAR_K_LAG,is_linear=True)
     X_ligru_train, Y_ligru_train = build_dayX_decoder_data(train_df, pca_model, LIGRU_N_PCA, LIGRU_K_LAG, is_linear=False)
 
-    print("[DEBUG] day1 shapes => GRU:", X_gru_train.shape, Y_gru_train.shape)
-    print("[DEBUG] day1 shapes => LSTM:", X_lstm_train.shape, Y_lstm_train.shape)
-    print("[DEBUG] day1 shapes => Linear:", X_lin_train.shape, Y_lin_train.shape)
-    print("[DEBUG] day1 shapes => LiGRU:", X_ligru_train.shape, Y_ligru_train.shape)
+    print("[DEBUG] day0 shapes => GRU:", X_gru_train.shape, Y_gru_train.shape)
+    print("[DEBUG] day0 shapes => LSTM:", X_lstm_train.shape, Y_lstm_train.shape)
+    print("[DEBUG] day0 shapes => Linear:", X_lin_train.shape, Y_lin_train.shape)
+    print("[DEBUG] day0 shapes => LiGRU:", X_ligru_train.shape, Y_ligru_train.shape)
 
     ds_gru   = TensorDataset(torch.tensor(X_gru_train),   torch.tensor(Y_gru_train).unsqueeze(-1))
     dl_gru   = DataLoader(ds_gru, batch_size=BATCH_SIZE, shuffle=True)
@@ -658,7 +701,7 @@ def main():
     dl_ligru = DataLoader(ds_ligru, batch_size=BATCH_SIZE, shuffle=True)
 
     ###########################################################################
-    # 3) Initialize and train models on day1
+    # 3) Initialize and train models on day0
     ###########################################################################
     gru_model    = GRUDecoder(GRU_N_PCA,    GRU_HIDDEN_DIM).to(DEVICE)
     lstm_model   = LSTMDecoder(LSTM_N_PCA,  LSTM_HIDDEN_DIM).to(DEVICE)
@@ -672,7 +715,7 @@ def main():
 
     criterion = nn.MSELoss()
 
-    print("[INFO] Training decoders on Day1 ...")
+    print("[INFO] Training decoders on Day0 ...")
     for ep in range(1, NUM_EPOCHS + 1):
         loss_gru   = train_decoder(gru_model,    dl_gru,   gru_opt, criterion)
         loss_lstm  = train_decoder(lstm_model,   dl_lstm,  lstm_opt, criterion)
@@ -686,7 +729,7 @@ def main():
     print("[INFO] Training complete.\n")
 
     ###########################################################################
-    # 4) Evaluate each day. We store day => VAF results, then plot them.
+    # 4) Evaluate each day
     ###########################################################################
     results_days = []
     results_gru  = []
@@ -695,24 +738,33 @@ def main():
     results_ligru= []
 
     def evaluate_day(day_df, day_label):
-        """
-        Evaluate the decoders on a single day.
-        If RECALC_PCA_EACH_DAY is True, we recalc PCA using that day’s entire data
-        (and still feed it into the day1-trained model).
-        Then compute VAF on that day.
-
-        We also optionally do random plots.
-        """
-        # Possibly recalc PCA
-        local_pca_model = pca_model
+        local_pca_model = global_pca_model
         if REDUCTION_METHOD.upper() == "PCA" and RECALC_PCA_EACH_DAY:
             day_z_for_pca = gather_day_spike_data_for_pca(day_df)
             if day_z_for_pca.shape[0] > 0:
                 from sklearn.decomposition import PCA
-                # fit new PCA up to max_dim
                 new_pca = PCA(n_components=max_dim, random_state=SEED)
                 new_pca.fit(day_z_for_pca)
                 local_pca_model = new_pca
+
+        # If we want alignment to day0, we need dayD's full PCA basis + day0's
+        # day0's basis => from global_pca_model
+        # dayD's basis => from local_pca_model
+        # NOTE: sklearn PCA: .components_ shape is (n_components, p).
+        # We want a p x p with columns = eigenvectors. Usually we do .T
+        V_day0_full = None
+        V_dayD_full = None
+
+        # We'll do realignment only if local_pca_model is different from day0's
+        # and if we have an actual full set of principal components
+        if local_pca_model is not None and global_pca_model is not None:
+            # day0's full
+            if global_pca_model.components_.shape[0] == global_pca_model.components_.shape[1]:
+                # p x p
+                V_day0_full = global_pca_model.components_.T
+            # dayD's full
+            if local_pca_model.components_.shape[0] == local_pca_model.components_.shape[1]:
+                V_dayD_full = local_pca_model.components_.T
 
         if TRAIN_TRIAL_BASED:
             # TRIAL-BASED EVAL + PLOTTING
@@ -728,10 +780,31 @@ def main():
                 sm = smooth_spike_data(X_trial,
                                        bin_size=BIN_SIZE*BIN_FACTOR,
                                        smoothing_length=SMOOTHING_LENGTH)
-                z  = safe_zscore(sm, axis=0)
+                if APPLY_ZSCORE:
+                    z  = safe_zscore(sm, axis=0)
+                else:
+                    z  = sm
+
+                # We do local PCA transform or alignment
                 if local_pca_model is not None:
-                    full_proj = local_pca_model.transform(z)
-                    X_pca = full_proj[:, :n_pca]
+                    # check if REALIGN_PCA_TO_DAY0 is True
+                    if (REALIGN_PCA_TO_DAY0
+                        and (V_day0_full is not None)
+                        and (V_dayD_full is not None)
+                        and (local_pca_model is not global_pca_model)):
+                        # compute alignment R
+                        R = compute_alignment_matrix(V_dayD_full, V_day0_full)
+                        # Then project dayD data onto day0 subspace
+                        # first do Y@R => day0 basis, then pick top n_pca columns from day0
+                        # day0's top-n_pca => V_day0_full[:, :n_pca]
+                        V0_k = V_day0_full[:, :n_pca]
+                        # (T x p) @ (p x p) => (T x p), then (T x p) @ (p x n_pca) => (T x n_pca)
+                        z_aligned = (z @ R) @ V0_k
+                        X_pca = z_aligned
+                    else:
+                        # normal local transform
+                        full_proj = local_pca_model.transform(z)
+                        X_pca     = full_proj[:, :n_pca]
                 else:
                     X_pca = z[:, :n_pca]
 
@@ -787,7 +860,6 @@ def main():
                     decode_trial(X_trial, LIGRU_N_PCA, LIGRU_K_LAG, ligru_model,  is_linear=False)
                 )
 
-            # Flatten => day-level VAF
             gru_all_true = np.concatenate(Y_all_list) if Y_all_list else np.array([])
             gru_all_pred = np.concatenate(gru_preds_by_trial) if gru_preds_by_trial else np.array([])
             gru_vaf_day  = compute_vaf(gru_all_true, gru_all_pred)
@@ -808,7 +880,6 @@ def main():
                   f"GRU={gru_vaf_day:.3f}, LSTM={lstm_vaf_day:.3f}, "
                   f"Linear={lin_vaf_day:.3f}, LiGRU={ligru_vaf_day:.3f}")
 
-            # Optional plots
             if SHOW_GRAPHS:
                 plot_trial_random_samples(
                     day_label=day_label,
@@ -824,89 +895,106 @@ def main():
 
         else:
             # CONTINUOUS approach
-            big_spike_smooth, big_force_arr = build_continuous_dataset(
+            big_spike_arr, big_force_arr = build_continuous_dataset(
                 day_df, BIN_FACTOR, BIN_SIZE, SMOOTHING_LENGTH
             )
-            if big_spike_smooth.shape[0] == 0:
+            if big_spike_arr.shape[0] == 0:
                 print(f"[WARNING] Day={day_label} => no data in continuous approach.")
                 return np.nan, np.nan, np.nan, np.nan
 
-            z  = safe_zscore(big_spike_smooth, axis=0)
             if local_pca_model is not None:
-                z_full = local_pca_model.transform(z)
+                if (REALIGN_PCA_TO_DAY0 
+                    and (V_day0_full is not None) 
+                    and (V_dayD_full is not None)
+                    and (local_pca_model is not global_pca_model)):
+                    # realign
+                    R = compute_alignment_matrix(V_dayD_full, V_day0_full)
+                    # Then project dayD data onto day0 basis
+                    # We'll decode each model separately, so let's handle model dims individually
+                    # But simpler: we can just keep the full p-dim day0 basis then slice columns:
+                    day0_proj = (big_spike_arr @ R) @ V_day0_full
+                else:
+                    # normal local transform
+                    day0_proj_full = local_pca_model.transform(big_spike_arr)
+                    day0_proj      = day0_proj_full  # shape (T, max_dim)
             else:
-                z_full = z
+                day0_proj = big_spike_arr
 
             # Evaluate GRU
-            X_gru_te, Y_gru_te = create_rnn_dataset_continuous(z_full[:, :GRU_N_PCA], big_force_arr, GRU_K_LAG)
-            dl_gru_te = DataLoader(
-                TensorDataset(torch.tensor(X_gru_te), torch.tensor(Y_gru_te).unsqueeze(-1)),
-                batch_size=BATCH_SIZE, shuffle=False
-            )
+            X_gru_te = day0_proj[:, :GRU_N_PCA]
+            Y_gru_te = big_force_arr
+            ds_gru_te = TensorDataset(torch.tensor(
+                create_rnn_dataset_continuous(X_gru_te, Y_gru_te, GRU_K_LAG)[0]
+            ), torch.tensor(
+                create_rnn_dataset_continuous(X_gru_te, Y_gru_te, GRU_K_LAG)[1]
+            ).unsqueeze(-1))
+            dl_gru_te = DataLoader(ds_gru_te, batch_size=BATCH_SIZE, shuffle=False)
+
             preds_list, ytrue_list = [], []
             gru_model.eval()
             with torch.no_grad():
-                for Xb, Yb in dl_gru_te:
-                    Xb = Xb.to(DEVICE)
-                    out = gru_model(Xb)
+                X_seq, Y_seq = create_rnn_dataset_continuous(X_gru_te, Y_gru_te, GRU_K_LAG)
+                for i in range(0, len(X_seq), BATCH_SIZE):
+                    batch_X = X_seq[i:i+BATCH_SIZE]
+                    batch_Y = Y_seq[i:i+BATCH_SIZE]
+                    batch_X_t = torch.tensor(batch_X).to(DEVICE)
+                    out = gru_model(batch_X_t)
                     preds_list.append(out.cpu().numpy().flatten())
-                    ytrue_list.append(Yb.numpy().flatten())
+                    ytrue_list.append(batch_Y)
             gru_all_pred = np.concatenate(preds_list) if preds_list else np.array([])
             gru_all_true = np.concatenate(ytrue_list) if ytrue_list else np.array([])
             gru_vaf_day  = compute_vaf(gru_all_true, gru_all_pred)
 
             # LSTM
-            X_lstm_te, Y_lstm_te = create_rnn_dataset_continuous(z_full[:, :LSTM_N_PCA], big_force_arr, LSTM_K_LAG)
-            dl_lstm_te = DataLoader(
-                TensorDataset(torch.tensor(X_lstm_te), torch.tensor(Y_lstm_te).unsqueeze(-1)),
-                batch_size=BATCH_SIZE, shuffle=False
-            )
+            X_lstm_te = day0_proj[:, :LSTM_N_PCA]
+            Y_lstm_te = big_force_arr
+            X_seq, Y_seq = create_rnn_dataset_continuous(X_lstm_te, Y_lstm_te, LSTM_K_LAG)
             preds_list, ytrue_list = [], []
             lstm_model.eval()
             with torch.no_grad():
-                for Xb, Yb in dl_lstm_te:
-                    Xb = Xb.to(DEVICE)
-                    out = lstm_model(Xb)
+                for i in range(0, len(X_seq), BATCH_SIZE):
+                    batch_X = X_seq[i:i+BATCH_SIZE]
+                    batch_Y = Y_seq[i:i+BATCH_SIZE]
+                    batch_X_t = torch.tensor(batch_X).to(DEVICE)
+                    out = lstm_model(batch_X_t)
                     preds_list.append(out.cpu().numpy().flatten())
-                    ytrue_list.append(Yb.numpy().flatten())
+                    ytrue_list.append(batch_Y)
             lstm_all_pred = np.concatenate(preds_list) if preds_list else np.array([])
             lstm_all_true = np.concatenate(ytrue_list) if ytrue_list else np.array([])
             lstm_vaf_day  = compute_vaf(lstm_all_true, lstm_all_pred)
 
             # Linear
-            X_lin_te, Y_lin_te = create_linear_dataset_continuous(z_full[:, :LINEAR_N_PCA],
-                                                                  big_force_arr, LINEAR_K_LAG)
-            dl_lin_te = DataLoader(
-                TensorDataset(torch.tensor(X_lin_te), torch.tensor(Y_lin_te).unsqueeze(-1)),
-                batch_size=BATCH_SIZE, shuffle=False
-            )
+            X_lin_te = day0_proj[:, :LINEAR_N_PCA]
+            Y_lin_te = big_force_arr
+            X_seq_lin, Y_seq_lin = create_linear_dataset_continuous(X_lin_te, Y_lin_te, LINEAR_K_LAG)
             preds_list, ytrue_list = [], []
             linear_model.eval()
             with torch.no_grad():
-                for Xb, Yb in dl_lin_te:
-                    Xb = Xb.to(DEVICE)
-                    out = linear_model(Xb)
+                for i in range(0, len(X_seq_lin), BATCH_SIZE):
+                    batch_X = X_seq_lin[i:i+BATCH_SIZE]
+                    batch_Y = Y_seq_lin[i:i+BATCH_SIZE]
+                    batch_X_t = torch.tensor(batch_X).to(DEVICE)
+                    out = linear_model(batch_X_t)
                     preds_list.append(out.cpu().numpy().flatten())
-                    ytrue_list.append(Yb.numpy().flatten())
+                    ytrue_list.append(batch_Y)
             lin_all_pred = np.concatenate(preds_list) if preds_list else np.array([])
             lin_all_true = np.concatenate(ytrue_list) if ytrue_list else np.array([])
             lin_vaf_day  = compute_vaf(lin_all_true, lin_all_pred)
 
             # LiGRU
-            X_ligru_te, Y_ligru_te = create_rnn_dataset_continuous(z_full[:, :LIGRU_N_PCA],
-                                                                   big_force_arr, LIGRU_K_LAG)
-            dl_ligru_te = DataLoader(
-                TensorDataset(torch.tensor(X_ligru_te), torch.tensor(Y_ligru_te).unsqueeze(-1)),
-                batch_size=BATCH_SIZE, shuffle=False
-            )
+            X_ligru_te = day0_proj[:, :LIGRU_N_PCA]
+            Y_ligru_te = big_force_arr
+            X_seq_ligru, Y_seq_ligru = create_rnn_dataset_continuous(X_ligru_te, Y_ligru_te, LIGRU_K_LAG)
             preds_list, ytrue_list = [], []
             ligru_model.eval()
             with torch.no_grad():
-                for Xb, Yb in dl_ligru_te:
-                    Xb = Xb.to(DEVICE)
-                    out = ligru_model(Xb)
+                for i in range(0, len(X_seq_ligru), BATCH_SIZE):
+                    batch_X = X_seq_ligru[i:i+BATCH_SIZE]
+                    batch_Y = Y_seq_ligru[i:i+BATCH_SIZE]
+                    batch_X_t = torch.tensor(batch_X).to(DEVICE)
+                    out = ligru_model(batch_X_t)
                     preds_list.append(out.cpu().numpy().flatten())
-                    ytrue_list.append(Yb.numpy().flatten())
+                    ytrue_list.append(batch_Y)
             ligru_all_pred = np.concatenate(preds_list) if preds_list else np.array([])
             ligru_all_true = np.concatenate(ytrue_list) if ytrue_list else np.array([])
             ligru_vaf_day  = compute_vaf(ligru_all_true, ligru_all_pred)
@@ -915,7 +1003,6 @@ def main():
                   f"GRU={gru_vaf_day:.3f}, LSTM={lstm_vaf_day:.3f}, "
                   f"Linear={lin_vaf_day:.3f}, LiGRU={ligru_vaf_day:.3f}")
 
-            # Optional: plot random segments
             if SHOW_GRAPHS and len(gru_all_true) > 0:
                 plot_continuous_random_segments(
                     day_label=day_label,
@@ -940,18 +1027,16 @@ def main():
         results_ligru.append(ligru_vaf)
 
     ###########################################################################
-    # 5) Plot the VAF vs. Day (a linear plot with x-axis as the real Date)
+    # 5) Plot the VAF vs. Day
     ###########################################################################
     fig, ax = plt.subplots(figsize=(8, 5))
-    # Convert your dates to a numeric format for plotting
     x_vals = mdates.date2num(results_days)
 
-    ax.plot(x_vals, results_gru,  marker='o', label="GRU")
-    ax.plot(x_vals, results_lstm, marker='o', label="LSTM")
-    ax.plot(x_vals, results_lin,  marker='o', label="Linear")
-    ax.plot(x_vals, results_ligru,marker='o', label="LiGRU")
+    ax.plot(x_vals, results_gru,   marker='o', label="GRU")
+    ax.plot(x_vals, results_lstm,  marker='o', label="LSTM")
+    ax.plot(x_vals, results_lin,   marker='o', label="Linear")
+    ax.plot(x_vals, results_ligru, marker='o', label="LiGRU")
 
-    # Format the x-axis to show dates nicely
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
     ax.set_xlabel("Day")
     ax.set_ylabel("VAF")
@@ -959,7 +1044,7 @@ def main():
     ax.legend()
     plt.gcf().autofmt_xdate()
     if SHOW_GRAPHS:
-        plt.savefig('day_evo.png',dpi=700)
+        plt.savefig('day_evo_realign_Jango.png', dpi=700)
         plt.show()
 
 if __name__ == "__main__":
