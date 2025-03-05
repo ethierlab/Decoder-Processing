@@ -2,7 +2,7 @@ import pickle
 import time
 import os
 
-output_file = 'experiment_results2.pkl'
+output_file = 'experiment_results_gru_seeds_PCA_5_14_16.pkl'
 # output_file = 'experiment_results_lstm.pkl'
 def load_results(file_path):
     if os.path.exists(file_path):

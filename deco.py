@@ -367,6 +367,11 @@ for ep in range(epochs):
 
 print("Training complete.")
 
+# === SAVE MODEL WEIGHTS ===
+torch.save(gru_model.state_dict(),   "gru_weights.pth")
+torch.save(lstm_model.state_dict(),  "lstm_weights.pth")
+torch.save(linear_model.state_dict(), "linear_weights.pth")
+
 ################################################################################
 # 12) PER-TRIAL PREDICTIONS & METRICS
 ################################################################################

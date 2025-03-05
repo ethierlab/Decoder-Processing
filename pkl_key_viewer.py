@@ -76,9 +76,9 @@ def print_dict_info(pkl_file_path, level=0):
 
 
 # Example usage with files
-# file_paths = ['Jango_dataset.pkl', 'projected_data_test.pkl']
+file_paths = ['projected_data_test.pkl']
 # file_paths = ['Jango_dataset.pkl']
-file_paths = ['experiment_results_lstm.pkl']
+# file_paths = ['experiment_results_lstm.pkl']
 
 for file_path in file_paths:
 

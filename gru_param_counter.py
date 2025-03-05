@@ -22,7 +22,7 @@ class GRUModel(nn.Module):
 def count_gru_params(input_size, hidden_size, num_layers=1):
     model = GRUModel(input_size, hidden_size, num_layers)
     return sum(p.numel() for p in model.parameters())
-file_path = 'experiment_results1.pkl'
+file_path = 'experiment_results_gru_hidden_long.pkl'
 with open(file_path, 'rb') as f:
             results = pickle.load(f)
 # --- 2) Suppose this is your list of runs (already done) ---
@@ -42,7 +42,7 @@ for run in runs:
     hidden_size = run['hidden_dim']
 
     run['num_params'] = count_gru_params(input_size, hidden_size, NUM_LAYERS)
-output_file = 'experiment_results2.pkl'
+output_file = 'experiment_results_gru_hidden_long_2.pkl'
 with open(output_file, 'wb') as f:
     pickle.dump(results, f)
 # Now each dictionary in 'runs' has 'num_params' set

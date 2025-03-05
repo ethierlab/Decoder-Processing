@@ -9,9 +9,9 @@ from scipy.interpolate import interp1d
 # Parameters
 bin_size = 0.05  # Time resolution in seconds
 smoothing_length = 0.05
-sigma = (smoothing_length / bin_size) / 2 # Gaussian smoothing sigma
+sigma = (smoothing_length / bin_size) / 2  # Gaussian smoothing sigma
 window_start = -1.0  # Start of window relative to event
-window_end = 4.0  # End of window relative to event
+window_end = 4.0    # End of window relative to event
 n_component = 30
 
 # Load data
@@ -23,9 +23,7 @@ with open('force.pkl', 'rb') as f:
 
 # Smooth spike rate data
 smoothed_spikerate = {}
-# print(spikeratedata.items())
 for channel, neurons in spikeratedata.items():
-    print(channel)
     if channel == "Event time":
         continue
     smoothed_spikerate[channel] = {}
@@ -37,9 +35,9 @@ def perform_reduction(data, method):
     if method == "PCA":
         reducer = PCA(n_components=n_component)
     elif method == "UMAP":
-        reducer = umap.UMAP(n_components=3)
+        reducer = umap.UMAP(n_components=n_component)
     elif method == "t-SNE":
-        reducer = TSNE(n_components=3)
+        reducer = TSNE(n_components=n_component)
     else:
         raise ValueError("Invalid reduction method")
     return reducer.fit_transform(data)
@@ -52,14 +50,19 @@ concatenated_data = np.hstack([
 
 print("Shape of concatenated_data:", concatenated_data.shape)
 
+# Perform all three reductions
 pca_projected = perform_reduction(concatenated_data, "PCA")
-print("Shape of PCA projected data:", pca_projected.shape)
+umap_projected = perform_reduction(concatenated_data, "UMAP")
+tsne_projected = perform_reduction(concatenated_data, "t-SNE")
 
-# Trial alignment
+print("Shape of PCA projected data:", pca_projected.shape)
+print("Shape of UMAP projected data:", umap_projected.shape)
+print("Shape of t-SNE projected data:", tsne_projected.shape)
+
+# Trial alignment function
 def extract_projected_data_per_trial(data, event_times, bin_size, window_start, window_end):
     common_times = np.arange(window_start, window_end, bin_size)
     trial_data_dict = {}
-    print(len(event_times))
     for idx, t0 in enumerate(event_times):
         relative_times = np.arange(0, len(data)) * bin_size - t0
         indices = np.where((relative_times >= window_start) & (relative_times <= window_end))[0]
@@ -77,31 +80,36 @@ def extract_projected_data_per_trial(data, event_times, bin_size, window_start, 
             interpolated_data[:, i] = f(common_times)
 
         # interpolated_data: shape (number_of_common_times, dimensions)
-        # after transpose: (dimensions, number_of_common_times)
+        # we store as (dimensions, number_of_common_times)
         trial_data_dict[idx] = interpolated_data.T
 
     return trial_data_dict
 
 event_times = spikeratedata["Event time"]
+
+# Extract trials for each dimensionality reduction result
 pca_trials = extract_projected_data_per_trial(pca_projected, event_times, bin_size, window_start, window_end)
-print(len(pca_trials))
+umap_trials = extract_projected_data_per_trial(umap_projected, event_times, bin_size, window_start, window_end)
+tsne_trials = extract_projected_data_per_trial(tsne_projected, event_times, bin_size, window_start, window_end)
+
 # Print shapes of a few PCA trials to check consistency
+print("Number of PCA trials extracted:", len(pca_trials))
 if len(pca_trials) > 0:
-    # for i in range(min(3, len(pca_trials))):
-    for i in range(len(pca_trials)):
+    for i in range(min(3, len(pca_trials))):
         print(f"PCA trial {i} shape:", pca_trials[i].shape)
 
+# Force data per trial
 force_trials = {
     "x": {
         idx: np.array(force["Force"]["x"])[
-            int(t0 / bin_size) + int(window_start / bin_size): 
+            int(t0 / bin_size) + int(window_start / bin_size):
             int(t0 / bin_size) + int(window_end / bin_size)
         ].tolist()
         for idx, t0 in enumerate(event_times)
     },
     "y": {
         idx: np.array(force["Force"]["y"])[
-            int(t0 / bin_size) + int(window_start / bin_size): 
+            int(t0 / bin_size) + int(window_start / bin_size):
             int(t0 / bin_size) + int(window_end / bin_size)
         ].tolist()
         for idx, t0 in enumerate(event_times)
@@ -113,15 +121,18 @@ force_x_lengths = [len(x_data) for x_data in force_trials["x"].values()]
 force_y_lengths = [len(y_data) for y_data in force_trials["y"].values()]
 print("Force X lengths for first few trials:", force_x_lengths[:5])
 print("Force Y lengths for first few trials:", force_y_lengths[:5])
+print("Total Force X trials:", len(force_x_lengths))
+print("Total Force Y trials:", len(force_y_lengths))
 
-print("Force X lengths:", len(force_x_lengths))
-print("Force Y lengths:", len(force_y_lengths))
-
+# Organize final processed data
 processed_data = {
     "PCA": pca_trials,
+    "UMAP": umap_trials,
+    "t-SNE": tsne_trials,
     "Force": force_trials
 }
 
+# Save processed data
 output_path = 'Jango_dataset.pkl'
 with open(output_path, 'wb') as f:
     pickle.dump(processed_data, f)
