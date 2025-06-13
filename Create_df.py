@@ -167,7 +167,9 @@ def process_mat_file(mat_file_path, output_dir, standard_headers=None):
             # Use the provided time frame from the file.
             time_frame = f['xds/time_frame'][()]
             time_frame = np.array(time_frame).flatten()
-            
+
+            trial_target_dir = f['xds/trial_target_dir'][()]    # (n_trials,)
+            trial_target_dir = np.squeeze(trial_target_dir)
             # --- Assemble Data Dictionary ---
             data_dict = {
                 'year': year,
@@ -181,7 +183,8 @@ def process_mat_file(mat_file_path, output_dir, standard_headers=None):
                 'bin_width': bin_width_val,
                 'time_frame': time_frame,
                 'force': force_data,      # Now, force_data is a DataFrame with columns 'x' and 'y'
-                'trial_start_time': trial_start_time
+                'trial_start_time': trial_start_time,
+                'trial_target_dir': trial_target_dir
             }
             
             # Create a DataFrame (one row for this file/trial)
