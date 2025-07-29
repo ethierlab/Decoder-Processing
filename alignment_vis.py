@@ -140,6 +140,7 @@ def main():
     ap.add_argument("--samples", type=int, default=800, help="Sub-sample for plotting clarity")
     ap.add_argument("--dim", choices=[2, 3], type=int, default=3, help="Plot dimensionality")
     ap.add_argument("--save", default=None, metavar="FILE", help="If given, save figure instead of showing")
+    ap.add_argument('--type',type=str, default='scatter', help="choose between scatter or lines")
     args = ap.parse_args()
 
     set_seed(SEED)
@@ -203,17 +204,28 @@ def main():
 
         lab_raw = f"{d.date()} (raw)"
         lab_al  = f"{d.date()} (aligned)"
-        if args.dim == 3:
-            ax.scatter(Z_tgt_plot[:, 0], Z_tgt_plot[:, 1], Z_tgt_plot[:, 2],
-                       s=8, marker='^', alpha=.55, label=lab_raw)
-            ax.scatter(Z_al_plot[:, 0], Z_al_plot[:, 1], Z_al_plot[:, 2],
-                       s=8, marker='s', alpha=.55, label=lab_al)
-        else:
-            ax.scatter(Z_tgt_plot[:, 0], Z_tgt_plot[:, 1],
-                       s=8, marker='^', alpha=.55, label=lab_raw)
-            ax.scatter(Z_al_plot[:, 0], Z_al_plot[:, 1],
-                       s=8, marker='s', alpha=.55, label=lab_al)
-
+        if args.type == "scatter":
+            if args.dim == 3:
+                ax.scatter(Z_tgt_plot[:, 0], Z_tgt_plot[:, 1], Z_tgt_plot[:, 2],
+                        s=8, marker='^', alpha=.55, label=lab_raw)
+                ax.scatter(Z_al_plot[:, 0], Z_al_plot[:, 1], Z_al_plot[:, 2],
+                        s=8, marker='s', alpha=.55, label=lab_al)
+            else:
+                ax.scatter(Z_tgt_plot[:, 0], Z_tgt_plot[:, 1],
+                        s=8, marker='^', alpha=.55, label=lab_raw)
+                ax.scatter(Z_al_plot[:, 0], Z_al_plot[:, 1],
+                        s=8, marker='s', alpha=.55, label=lab_al)
+        else: 
+            if args.dim == 3:
+                ax.plot(Z_tgt_plot[:, 0], Z_tgt_plot[:, 1], Z_tgt_plot[:, 2],
+                        marker='^', alpha=.55, label=lab_raw)
+                ax.plot(Z_al_plot[:, 0], Z_al_plot[:, 1], Z_al_plot[:, 2],
+                        marker='x', alpha=.55, label=lab_al)
+            else:
+                ax.plot(Z_tgt_plot[:, 0], Z_tgt_plot[:, 1],
+                        marker='^', alpha=.55, label=lab_raw)
+                ax.plot(Z_al_plot[:, 0], Z_al_plot[:, 1],
+                        marker='x', alpha=.55, label=lab_al)
     # ——— cosmetics ———————————————————————————————
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")
