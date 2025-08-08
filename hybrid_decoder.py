@@ -19,7 +19,18 @@ COMBINED_PICKLE_FILE = "output.pkl"
 SAVE_RESULTS_PATH    = "df_results_emg_validation_hybrid_200_CV.pkl"
 BIN_SIZE             = 0.001
 SMOOTHING_LENGTH     = 0.05
+df = pd.read_pickle('output.pkl')
+print(df.iloc[0]['bin_width'])  # e.g., 0.05 means 50 ms bins
+print(df.iloc[0]['spike_counts'].shape)
+# Suppose df is your final DataFrame (from your .pkl or .mat file parse)
+first_trial_time = df.iloc[0]['time_frame']  # This should be a numpy array
+print(first_trial_time[:10])   # Show the first 10 time stamps
 
+# Calculate the "bin size" empirically:
+bin_sizes = np.diff(first_trial_time)
+print("First 10 bin sizes:", bin_sizes[:10])
+print("Unique bin sizes:", np.unique(np.round(bin_sizes, 8)))
+print("Mean bin size:", np.mean(bin_sizes))
 GRU_N_PCA   = 14 ; GRU_HIDDEN_DIM   = 5  ; GRU_K_LAG   = 16
 LSTM_N_PCA  = 14 ; LSTM_HIDDEN_DIM  = 16 ; LSTM_K_LAG  = 16
 LINEAR_N_PCA= 18 ; LINEAR_HIDDEN_DIM= 64 ; LINEAR_K_LAG= 16

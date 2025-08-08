@@ -20,7 +20,7 @@ from numpy.linalg import pinv
 ###############################################################################
 
 COMBINED_PICKLE_FILE = (
-    "C:/Users/Ethier Lab/Documents/GitHub/Decoder-Processing/DataSET/Jango_ISO_2015/combined.pkl"
+    "combined.pkl"
 )
 
 REDUCTION_METHOD = "PCA"

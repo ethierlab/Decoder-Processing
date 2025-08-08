@@ -1,35 +1,49 @@
-import os, sys, random, datetime
+import os, sys, random, datetime, argparse
 import numpy as np
 import pandas as pd
 import torch, torch.nn as nn, torch.optim as optim
+import time
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.decomposition import PCA
-import umap
-import argparse
 from collections import defaultdict
 from scipy.ndimage import gaussian_filter1d
-from scipy.signal import iirnotch, filtfilt
-# ────────────── GLOBALS ──────────────
+from scipy.signal import butter, filtfilt 
+from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
+
+# ──────────────── UMAP import ────────────────
+try:
+    import umap
+except ImportError:
+    umap = None
+
+# ─────────────────────────── globals ────────────────────────────
+SEED            = 42
+DEVICE          = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+COMBINED_PICKLE_FILE = "output.pkl"
+SAVE_RESULTS_PATH    = "df_results_emg_validation_hybrid_200.pkl" 
+BIN_SIZE = 0.02 # 20 ms bin size
+SMOOTHING_LENGTH = 0.05 # 50 ms smoothing length
+
 DECODER_CONFIG = {
-    "GRU":    {"N_PCA": 14, "HIDDEN_DIM": 5,  "K_LAG": 16, "LEARNING_RATE": 1e-3, "NUM_EPOCHS": 300, "BATCH_SIZE": 64},
-    "LSTM":   {"N_PCA": 14, "HIDDEN_DIM": 16, "K_LAG": 16, "LEARNING_RATE": 1e-3, "NUM_EPOCHS": 300, "BATCH_SIZE": 64},
-    "LIN":    {"N_PCA": 18, "HIDDEN_DIM": 64, "K_LAG": 16, "LEARNING_RATE": 1e-3, "NUM_EPOCHS": 300, "BATCH_SIZE": 64},
-    "LiGRU":  {"N_PCA": 14, "HIDDEN_DIM": 5,  "K_LAG": 16, "LEARNING_RATE": 1e-3, "NUM_EPOCHS": 300, "BATCH_SIZE": 64},
+    "GRU":    {"N_PCA": 32, "HIDDEN_DIM": 96, "K_LAG": 25, "LEARNING_RATE": 0.003, "NUM_EPOCHS": 200},
+    "LSTM":   {"N_PCA": 24, "HIDDEN_DIM": 128, "K_LAG": 25, "LEARNING_RATE": 0.003, "NUM_EPOCHS": 300},
+    "LIN":    {"N_PCA": 32, "HIDDEN_DIM": 64, "K_LAG": 16, "LEARNING_RATE": 0.003, "NUM_EPOCHS": 100 },
+    "LiGRU":  {"N_PCA": 32, "HIDDEN_DIM": 5,  "K_LAG": 16, "LEARNING_RATE": 0.001, "NUM_EPOCHS": 200 },
 }
-BIN_SIZE = 0.001
-SMOOTHING_LENGTH = 0.05
-CV_HOLDOUT_RATIO = 0.33
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+NUM_EPOCHS   = 300
+BATCH_SIZE   = 64
+LEARNING_RATE= 1e-3
 
-# ────────── Reproducibility ──────────
-def set_seed(seed=42):
+# ─────────────────── reproducibility helpers ────────────────────
+def set_seed(seed=SEED):
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark     = False
 
-# ────────── Preprocessing ──────────
+# ──────────────────────── preprocessing ─────────────────────────
 def smooth_spike_data(x, bin_size=BIN_SIZE, smoothing_length=SMOOTHING_LENGTH):
     sigma = (smoothing_length / bin_size) / 2
     out = np.zeros_like(x, dtype=float)
@@ -37,16 +51,18 @@ def smooth_spike_data(x, bin_size=BIN_SIZE, smoothing_length=SMOOTHING_LENGTH):
         out[:, ch] = gaussian_filter1d(x[:, ch], sigma=sigma)
     return out
 
-def notch_filter_emg(a, fs=1000, notch_freq=60, Q=30):
-    b, c = iirnotch(notch_freq, Q, fs)
-    return filtfilt(b, c, a, axis=0)
+def butter_lowpass(data, fs, fc=5, order=4):
+    nyq = fs / 2
+    if fc >= nyq:
+        raise ValueError(f"fc ({fc} Hz) doit être < à la fréquence de Nyquist ({nyq} Hz) pour fs={fs}")
+    b, a = butter(order, fc / nyq, "low")
+    return filtfilt(b, a, data, axis=0)
 
-def smooth_emg(a, window_size=5):
+def smooth_emg(a, bin_width):
+    fs = 1.0 / bin_width     # exemple : 1/0.02 = 50Hz
     rect = np.abs(a)
-    filt = notch_filter_emg(rect)
-    return np.apply_along_axis(
-        lambda x: np.convolve(x, np.ones(window_size)/window_size, mode="same"),
-        0, filt)
+    filt = butter_lowpass(rect, fs=fs, fc=5, order=4)
+    return filt
 
 def map_emg_labels(emg_df):
     TARGET = {"FCR","FDS","FDP","FCU","ECR","EDC","ECU"}
@@ -83,6 +99,7 @@ def build_continuous_dataset_preprocessed(df, reference_emg_cols=None):
     Xs, Ys = [], []
     expected = [f"neuron{i}" for i in range(1,97)]
     for _,row in df.iterrows():
+        bin_width = row.get("bin_width", BIN_SIZE)
         sp, emg = row["spike_counts"], row["EMG"]
         if not isinstance(sp, pd.DataFrame) or sp.empty: continue
         sp = sp.reindex(expected, axis=1, fill_value=0)
@@ -91,23 +108,59 @@ def build_continuous_dataset_preprocessed(df, reference_emg_cols=None):
             e = emg
             if reference_emg_cols is not None:
                 e = e.reindex(reference_emg_cols, axis=1, fill_value=0)
-            Ys.append(smooth_emg(e.values))
+            Ys.append(smooth_emg(e.values, bin_width))
         else:
-            Ys.append(smooth_emg(np.asarray(emg)))
+            Ys.append(smooth_emg(np.asarray(emg), bin_width))
     if not Xs: return np.empty((0,)), np.empty((0,))
     return np.concatenate(Xs), np.concatenate(Ys)
 
-# ────────── CV Split: Random Sample Holdout ──────────
-def random_holdout_split(X, Y, holdout_ratio, seed):
-    n = X.shape[0]
-    rs = np.random.RandomState(seed)
-    idx = np.arange(n)
-    rs.shuffle(idx)
-    cut = int(n * (1 - holdout_ratio))
-    train_idx, hold_idx = idx[:cut], idx[cut:]
-    return X[train_idx], Y[train_idx], X[hold_idx], Y[hold_idx]
+# ────────────── manifold fitters: PCA or UMAP ──────────────
+def fit_manifold(X, method='pca', n_components=10, random_state=SEED):
+    if method == 'pca':
+        model = PCA(n_components=n_components, random_state=random_state)
+    elif method == 'umap':
+        if umap is None:
+            raise RuntimeError("umap-learn not installed. Run 'pip install umap-learn'")
+        model = umap.UMAP(n_components=n_components, random_state=random_state, n_neighbors=30, min_dist=0.1)
+    else:
+        raise ValueError(f"Unknown manifold method: {method}")
+    model.fit(X)
+    return model
 
-# ────────── Sequence constructors ──────────
+def manifold_transform(model, X, method='pca'):
+    if method == 'pca':
+        return model.transform(X)
+    elif method == 'umap':
+        return model.transform(X)
+    else:
+        raise ValueError(f"Unknown manifold method: {method}")
+
+# ───────────────────────── split helper ─────────────────────────
+def hybrid_time_based_split(df_day: pd.DataFrame, split_ratio: float=0.5):
+    train_rows, hold_rows = [], []
+    for _,row in df_day.iterrows():
+        sp   = row["spike_counts"];  emg = row["EMG"]
+        cut  = max(1, int(len(sp)*split_ratio))
+        r_tr = row.copy(); r_ho = row.copy()
+        r_tr["spike_counts"] = sp.iloc[:cut ].reset_index(drop=True)
+        r_ho["spike_counts"] = sp.iloc[cut:].reset_index(drop=True)
+        if isinstance(emg, pd.DataFrame):
+            r_tr["EMG"] = emg.iloc[:cut ].reset_index(drop=True)
+            r_ho["EMG"] = emg.iloc[cut:].reset_index(drop=True)
+        train_rows.append(r_tr); hold_rows.append(r_ho)
+    return pd.DataFrame(train_rows), pd.DataFrame(hold_rows)
+
+def blocked_kfold_indices(n_samples, n_splits=5):
+    block_size = n_samples // n_splits
+    splits = []
+    for k in range(n_splits):
+        val_start = k * block_size
+        val_end = (k + 1) * block_size if k < n_splits - 1 else n_samples
+        idx_val = np.arange(val_start, val_end)
+        idx_train = np.concatenate([np.arange(0, val_start), np.arange(val_end, n_samples)])
+        splits.append((idx_train, idx_val))
+    return splits
+# ───────────────────── sequence constructors ───────────────────
 def create_rnn_dataset(X, Y, k):
     if X.shape[0]<=k: return np.empty((0,k,X.shape[1])), np.empty((0,Y.shape[1]))
     Xo,Yo=[],[]
@@ -122,24 +175,25 @@ def create_linear_dataset(X, Y, k):
         Xo.append(X[t-k:t].reshape(-1)); Yo.append(Y[t])
     return np.asarray(Xo,np.float32), np.asarray(Yo,np.float32)
 
-# ────────── Dimensionality Reduction ──────────
-def get_day_dimred(df, n_components, method="PCA"):
-    X_day, _ = build_continuous_dataset_preprocessed(df)
-    if X_day.shape[0] == 0:
-        return None
-    if method.lower() == "umap":
-        reducer = umap.UMAP(n_components=n_components, random_state=42)
-        reducer.fit(X_day)
-        return reducer
+def build_day_decoder_data(df, manifold_model, n_manifold, k, is_linear, ref_cols, method='pca'):
+    Xbig,Ybig = build_continuous_dataset_preprocessed(df, ref_cols)
+    if Xbig.size==0: return np.empty((0,)), np.empty((0,))
+    Z = manifold_transform(manifold_model, Xbig, method)[:,:n_manifold]
+    if is_linear: return create_linear_dataset(Z,Ybig,k)
+    return create_rnn_dataset(Z,Ybig,k)
+
+def get_model_for_decoder(dec_name, n_pca, cfg, n_out):
+    if dec_name == "GRU":
+        return GRUDecoder(n_pca, cfg["HIDDEN_DIM"], n_out).to(DEVICE)
+    elif dec_name == "LSTM":
+        return LSTMDecoder(n_pca, cfg["HIDDEN_DIM"], n_out).to(DEVICE)
+    elif dec_name == "LIN":
+        return LinearLagDecoder(n_pca * cfg["K_LAG"], cfg["HIDDEN_DIM"], n_out).to(DEVICE)
+    elif dec_name == "LiGRU":
+        return LiGRUDecoder(n_pca, cfg["HIDDEN_DIM"], n_out).to(DEVICE)
     else:
-        pca_model = PCA(n_components=n_components, random_state=42)
-        pca_model.fit(X_day)
-        return pca_model
-
-def transform_dimred(model, X, method="PCA"):
-    return model.transform(X)
-
-# ────────── Model Definitions ──────────
+        raise ValueError(f"Unknown decoder type: {dec_name}")
+# ---------------- Model Definitions ----------------
 class GRUDecoder(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
         super().__init__()
@@ -196,8 +250,8 @@ class LiGRUDecoder(nn.Module):
             h = self.cell(x[:, t, :], h)
         return self.fc(h)
 
-# ────────── Training Function ──────────
-def train_model(model, X_train, Y_train, num_epochs, batch_size, lr):
+# ---------------- Training Function ----------------
+def train_model(model, X_train, Y_train, num_epochs=NUM_EPOCHS, batch_size=BATCH_SIZE, lr=LEARNING_RATE):
     dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32),
                             torch.tensor(Y_train, dtype=torch.float32))
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -218,7 +272,7 @@ def train_model(model, X_train, Y_train, num_epochs, batch_size, lr):
             print(f"Epoch {ep}/{num_epochs}: Loss = {total_loss / len(loader):.4f}")
     return model
 
-# ────────── Evaluation Functions ──────────
+# ---------------- Evaluation Functions ----------------
 def compute_vaf_1d(y_true, y_pred):
     var_true = np.var(y_true)
     if var_true < 1e-12:
@@ -235,8 +289,8 @@ def evaluate_decoder(model, X_val, Y_val, context=""):
     model.eval()
     preds = []
     with torch.no_grad():
-        for i in range(0, len(X_val), DECODER_CONFIG['GRU']["BATCH_SIZE"]):  # Use the largest batch size for safety
-            batch_X = torch.tensor(X_val[i:i+DECODER_CONFIG['GRU']["BATCH_SIZE"]], dtype=torch.float32).to(DEVICE)
+        for i in range(0, len(X_val), BATCH_SIZE):
+            batch_X = torch.tensor(X_val[i:i+BATCH_SIZE], dtype=torch.float32).to(DEVICE)
             out = model(batch_X)
             preds.append(out.cpu().numpy())
     if preds:
@@ -247,40 +301,31 @@ def evaluate_decoder(model, X_val, Y_val, context=""):
     mean_vaf = np.nanmean(vaf_ch)
     return preds, vaf_ch, mean_vaf
 
-# ────────── Main Pipeline ──────────
+# ---------------- Main Pipeline ----------------
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--decoder', type=str, choices=['GRU', 'LSTM', 'LIN', 'LiGRU'], required=True)
-    parser.add_argument('--dim_red', type=str, choices=['PCA', 'UMAP'], required=True)
-    parser.add_argument('--cv_fold', type=int, required=True)
-    parser.add_argument('--n_cv_folds', type=int, default=10)
-    parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--combined_pickle_file', type=str, required=True)
-    parser.add_argument('--output_dir', type=str, required=True)
+    parser.add_argument('--manifold', default='pca', choices=['pca', 'umap'], help='Manifold learning method')
+    parser.add_argument('--output', default=SAVE_RESULTS_PATH)
+    parser.add_argument('--input', default=COMBINED_PICKLE_FILE)
+    parser.add_argument('--kfold', action='store_true', help='Active k-fold cross-validation (blocs temporels)')
+    parser.add_argument('--n_splits', type=int, default=5, help='Nombre de folds pour k-fold')
+    parser.add_argument('--decoder', default=None, choices=list(DECODER_CONFIG.keys()) + [None], help='Nom du décodeur à tester (ou tous)')
     args = parser.parse_args()
 
-    decoder_type = args.decoder
-    dim_red = args.dim_red
-    cv_fold = args.cv_fold
-    N_CV_FOLDS = args.n_cv_folds
-    seed = args.seed
-    combined_pickle_file = args.combined_pickle_file
-    output_dir = args.output_dir
+    set_seed()
+    print("device:", DEVICE)
+    
 
-    conf = DECODER_CONFIG[decoder_type]
-    set_seed(seed + cv_fold)
-
-    if not os.path.exists(combined_pickle_file):
-        print(f"[ERROR] cannot find {combined_pickle_file}")
+    # ---------- 1) Chargement & prétraitement -----------
+    if not os.path.exists(args.input):
+        print(f"[ERROR] cannot find {args.input}")
         sys.exit(1)
-    os.makedirs(output_dir, exist_ok=True)
-
-    df_raw = pd.read_pickle(combined_pickle_file)
+    df_raw = pd.read_pickle(args.input)
     df_raw["date"] = pd.to_datetime(df_raw["date"], errors="coerce")
     df, ref_cols = filter_and_map_emg(df_raw)
-
     all_results = []
 
+    # ---------- 2) scenario definitions ---------------------------------------
     scenarios = [
         {   # Jango : iso / wm / spr
             "name"        : "Jango_all",
@@ -317,108 +362,102 @@ def main():
             ],
         },
     ]
-
     print(f"[INFO] {len(scenarios)} scenarios to process")
 
-    for sc in scenarios:
-        df_scenario = df[df.apply(sc["train_filter"], axis=1)].copy()
-        if df_scenario.empty:
-            print(f"[WARNING] no trials for scenario {sc['name']} – skip")
-            continue
+    decoders_to_run = [args.decoder] if args.decoder else list(DECODER_CONFIG.keys())
 
-        for day in sorted(df_scenario["date"].dropna().unique()):
-            df_day = df_scenario[df_scenario["date"] == day].copy()
-            if df_day.empty:
+    for dec_name in decoders_to_run:
+        cfg = DECODER_CONFIG[dec_name]
+        print(f"\n============ {dec_name} ============")
+        for sc in scenarios:
+            df_scenario = df[df.apply(sc["train_filter"], axis=1)].copy()
+            if df_scenario.empty:
+                print(f"[WARNING] no trials for scenario {sc['name']} – skip")
                 continue
+            for day in sorted(df_scenario["date"].dropna().unique()):
+                df_day = df_scenario[df_scenario["date"] == day].copy()
+                if df_day.empty: continue
+                dstr = day.strftime("%Y-%m-%d")
+                print(f"\n=== {sc['name']} | {dstr} | {len(df_day)} trials ===")
 
-            dstr = day.strftime("%Y-%m-%d")
-            print(f"\n=== {sc['name']} | {dstr} | {len(df_day)} trials ===", flush=True)
+                # --- Concatène X/Y pour toute la journée ---
+                Xbig, Ybig = build_continuous_dataset_preprocessed(df_day, reference_emg_cols=ref_cols)
+                if Xbig.size == 0:
+                    print("  [WARNING] empty training slice – skip day")
+                    continue
 
-            # --- Preprocess whole day's data
-            X_full, Y_full = build_continuous_dataset_preprocessed(df_day, reference_emg_cols=ref_cols)
-            if X_full.shape[0] == 0:
-                print("  [WARNING] empty data – skip day")
-                continue
+                max_n_pca = max(cfg2["N_PCA"] for cfg2 in DECODER_CONFIG.values())
+                manifold_model = fit_manifold(Xbig, method=args.manifold, n_components=max_n_pca)
+                Zbig = manifold_model.transform(Xbig)
+                n_pca = cfg["N_PCA"]
+                k_lag = cfg["K_LAG"]
+                is_linear = (dec_name == "LIN")
+                # Création du dataset séquentiel (X, Y pour tout le jour)
+                if is_linear:
+                    X_all, Y_all = create_linear_dataset(Zbig[:, :n_pca], Ybig, k_lag)
+                else:
+                    X_all, Y_all = create_rnn_dataset(Zbig[:, :n_pca], Ybig, k_lag)
+                n_samples = X_all.shape[0]
+                if n_samples == 0: continue
 
-            print(f"  [CV] Fold {cv_fold+1}/{N_CV_FOLDS}", flush=True)
-            X_train, Y_train, X_hold, Y_hold = random_holdout_split(
-                X_full, Y_full, holdout_ratio=CV_HOLDOUT_RATIO, seed=seed + cv_fold
-            )
-
-            print(f"   [INFO] Dimensionality reduction: {dim_red}", flush=True)
-            max_n_pca = conf["N_PCA"]
-            model_dimred = get_day_dimred(
-                pd.DataFrame([{"spike_counts": pd.DataFrame(X_train), "EMG": pd.DataFrame(Y_train)}]),
-                n_components=max_n_pca, method=dim_red, seed=seed+cv_fold
-            )
-            Z_train = transform_dimred(model_dimred, X_train, method=dim_red)
-            Z_hold  = transform_dimred(model_dimred, X_hold, method=dim_red)
-
-            # Dataset for current decoder
-            if decoder_type == "LIN":
-                Xtr, Ytr = create_linear_dataset(Z_train[:,:conf["N_PCA"]], Y_train, conf["K_LAG"])
-                Xte, Yte = create_linear_dataset(Z_hold[:,:conf["N_PCA"]], Y_hold, conf["K_LAG"])
-                decoder = LinearLagDecoder(conf["N_PCA"]*conf["K_LAG"], conf["HIDDEN_DIM"], Ytr.shape[1]).to(DEVICE)
-            elif decoder_type == "GRU":
-                Xtr, Ytr = create_rnn_dataset(Z_train[:,:conf["N_PCA"]], Y_train, conf["K_LAG"])
-                Xte, Yte = create_rnn_dataset(Z_hold[:,:conf["N_PCA"]], Y_hold, conf["K_LAG"])
-                decoder = GRUDecoder(conf["N_PCA"], conf["HIDDEN_DIM"], Ytr.shape[1]).to(DEVICE)
-            elif decoder_type == "LSTM":
-                Xtr, Ytr = create_rnn_dataset(Z_train[:,:conf["N_PCA"]], Y_train, conf["K_LAG"])
-                Xte, Yte = create_rnn_dataset(Z_hold[:,:conf["N_PCA"]], Y_hold, conf["K_LAG"])
-                decoder = LSTMDecoder(conf["N_PCA"], conf["HIDDEN_DIM"], Ytr.shape[1]).to(DEVICE)
-            elif decoder_type == "LiGRU":
-                Xtr, Ytr = create_rnn_dataset(Z_train[:,:conf["N_PCA"]], Y_train, conf["K_LAG"])
-                Xte, Yte = create_rnn_dataset(Z_hold[:,:conf["N_PCA"]], Y_hold, conf["K_LAG"])
-                decoder = LiGRUDecoder(conf["N_PCA"], conf["HIDDEN_DIM"], Ytr.shape[1]).to(DEVICE)
-            else:
-                continue
-
-            if Xtr.shape[0] == 0 or Xte.shape[0] == 0:
-                print("  [WARNING] skip empty train/test")
-                continue
-
-            print(f"      training {decoder_type}…", flush=True)
-            decoder = train_model(
-                decoder, Xtr, Ytr,
-                num_epochs=conf["NUM_EPOCHS"],
-                batch_size=conf["BATCH_SIZE"],
-                lr=conf["LEARNING_RATE"]
-            )
-            preds, vaf_ch, mean_vaf = evaluate_decoder(
-                decoder, Xte, Yte, batch_size=conf["BATCH_SIZE"]
-            )
-
-            # Save result for this fold/decoder/dim_red
-            all_results.append({
-                "scenario_name" : sc["name"],
-                "monkey"        : df_day.iloc[0]["monkey"],
-                "train_task"    : "hybrid",
-                "test_task"     : "hybrid",
-                "decoder_type"  : decoder_type,
-                "dim_red"       : dim_red,
-                "mean_VAF"      : mean_vaf,
-                "VAF_channels"  : vaf_ch,
-                "cv_fold"       : cv_fold,
-                "seed"          : seed + cv_fold,
-                "n_pca"         : conf["N_PCA"],
-                "hidden_dim"    : conf["HIDDEN_DIM"],
-                "k_lag"         : conf["K_LAG"],
-                "learning_rate" : conf["LEARNING_RATE"],
-                "epochs"        : conf["NUM_EPOCHS"],
-                "batch_size"    : conf["BATCH_SIZE"],
-                "timestamp"     : datetime.datetime.now(),
-                "train_date"    : day,
-                "test_date"     : day,
-                "date"          : day,
-            })
-
-            # Save output after each day for robustness
-            fname = f"{sc['name']}_{decoder_type}_{dim_red}_cv{cv_fold}_{day.strftime('%Y%m%d')}.pkl"
-            path_out = os.path.join(output_dir, fname)
-            pd.DataFrame(all_results).to_pickle(path_out)
-            print(f"  [SAVED] {path_out}", flush=True)
-
+                if args.kfold:
+                    splits = blocked_kfold_indices(n_samples, n_splits=args.n_splits)
+                    vafs = []
+                    for i_fold, (idx_train, idx_val) in enumerate(splits):
+                        print(f"[Fold {i_fold+1}/{args.n_splits}]")
+                        X_train, Y_train = X_all[idx_train], Y_all[idx_train]
+                        X_val, Y_val = X_all[idx_val], Y_all[idx_val]
+                        model = get_model_for_decoder(dec_name, n_pca, cfg, Y_all.shape[1])
+                        model = train_model(model, X_train, Y_train, num_epochs=cfg["NUM_EPOCHS"], batch_size=BATCH_SIZE, lr=cfg["LEARNING_RATE"])
+                        _, vaf_ch, mVAF = evaluate_decoder(model, X_val, Y_val, context=f"{dec_name}-fold{i_fold+1}")
+                        vafs.append(mVAF)
+                        # Si tu veux les vafs channels : stocke vaf_ch ici aussi
+                    mean_vaf = np.mean(vafs)
+                    print(f"== {dec_name} | {day} | Cross-val mean VAF: {mean_vaf:.4f} ==")
+                    all_results.append({
+                        "scenario_name": sc["name"],
+                        "train_monkey": df_day.iloc[0]["monkey"],
+                        "test_monkey": df_day.iloc[0]["monkey"],
+                        "train_task": "crossval",
+                        "test_task": "crossval",
+                        "decoder_type": dec_name,
+                        "fold_mean_VAF": mean_vaf,
+                        "fold_VAFs": vafs,
+                        "emg_labels": ref_cols,
+                        "timestamp": datetime.datetime.now(),
+                        "train_date": day,
+                        "test_date": day,
+                        "date": day,
+                    })
+                else:
+                    split_point = int(n_samples * sc["split_ratio"])
+                    X_train, Y_train = X_all[:split_point], Y_all[:split_point]
+                    X_val, Y_val     = X_all[split_point:], Y_all[split_point:]
+                    model = get_model_for_decoder(dec_name, n_pca, cfg, Y_all.shape[1])
+                    model = train_model(model, X_train, Y_train, num_epochs=cfg["NUM_EPOCHS"], batch_size=BATCH_SIZE, lr=cfg["LEARNING_RATE"])
+                    _, vaf_ch, mVAF = evaluate_decoder(model, X_val, Y_val, context=f"{dec_name}-holdout")
+                    all_results.append({
+                        "scenario_name": sc["name"],
+                        "train_monkey": df_day.iloc[0]["monkey"],
+                        "test_monkey": df_day.iloc[0]["monkey"],
+                        "train_task": "hybrid",
+                        "test_task": "hybrid",
+                        "decoder_type": dec_name,
+                        "mean_VAF": mVAF,
+                        "per_channel_VAF": vaf_ch,
+                        "emg_labels": ref_cols,
+                        "timestamp": datetime.datetime.now(),
+                        "train_date": day,
+                        "test_date": day,
+                        "date": day,
+                    })
+    # --- Sauvegarde ---
+    if all_results:
+        df_final = pd.DataFrame(all_results)
+        df_final.to_pickle(args.output)
+        print(f"\n[INFO] saved results → {args.output}")
+    else:
+        print("\n[WARNING] nothing to save – no results collected")
 
 if __name__ == "__main__":
     main()

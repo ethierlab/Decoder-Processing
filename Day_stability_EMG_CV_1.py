@@ -10,12 +10,11 @@ from scipy.ndimage import gaussian_filter1d
 from numpy.linalg import pinv
 from sklearn.decomposition import PCA
 import umap
-import warnings
-import argparse
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-warnings.filterwarnings("ignore", message="n_jobs value 1 overridden to 1 by setting random_state.")
 ###############################################################################
-# CONFIG
+# CONFIG (tu peux adapter!)
 ###############################################################################
 
 COMBINED_PICKLE_FILE = (
@@ -28,15 +27,25 @@ BIN_SIZE = 0.001
 SMOOTHING_LENGTH = 0.05
 SAMPLING_RATE = 1000
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-BATCH_SIZE = 512
-N_FOLDS = 10  # <-- CROSSVAL : nombre de splits sur day0
-ARCH_HYPERPARAMS = {
-    "GRU":    dict(N_PCA=32, K_LAG=25, HIDDEN=96,   NUM_EPOCHS=200, LR=0.003),
-    "LSTM":   dict(N_PCA=24, K_LAG=25, HIDDEN=128,  NUM_EPOCHS=300, LR=0.003),
-    "Linear": dict(N_PCA=32, K_LAG=16, HIDDEN=64,   NUM_EPOCHS=100, LR=0.003),
-    "LiGRU":  dict(N_PCA=32, K_LAG=16, HIDDEN=5,    NUM_EPOCHS=200, LR=0.001),
-}
 
+N_FOLDS = 10  # <-- CROSSVAL : nombre de splits sur day0
+
+# Dims
+GRU_N_PCA    = 16
+LSTM_N_PCA   = 16
+LINEAR_N_PCA = 18
+LIGRU_N_PCA  = 14
+GRU_HIDDEN_DIM    = 17
+GRU_K_LAG         = 12
+LSTM_HIDDEN_DIM   = 18
+LSTM_K_LAG        = 10
+LINEAR_HIDDEN_DIM = 64
+LINEAR_K_LAG      = 16
+LIGRU_HIDDEN_DIM  = 5
+LIGRU_K_LAG       = 16
+NUM_EPOCHS = 200
+BATCH_SIZE = 64
+LEARNING_RATE = 0.001
 
 ###############################################################################
 # HELPERS
@@ -49,24 +58,6 @@ def set_seed(seed):
         torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-
-def random_split_indices(n_items, train_frac=0.75, rng=None):
-    all_indices = np.arange(n_items)
-    if rng is None:
-        rng = np.random
-    rng.shuffle(all_indices)
-    cutoff = int(train_frac * n_items)
-    train_idx = all_indices[:cutoff]
-    test_idx = all_indices[cutoff:]
-    return train_idx, test_idx
-    
-def get_all_unit_names(combined_df):
-    unit_set = set()
-    for idx, row in combined_df.iterrows():
-        sc = row.get("spike_counts", None)
-        if isinstance(sc, pd.DataFrame):
-            unit_set.update(sc.columns)
-    return sorted(list(unit_set))
 
 def butter_lowpass(data, fs, order=4):
     nyq = 0.5 * fs
@@ -112,7 +103,7 @@ def smooth_spike_data(x_2d, bin_size=0.001, smoothing_length=0.05):
         out[:, ch] = gaussian_smooth_1d(x_2d[:, ch], sigma)
     return out
 
-def build_continuous_dataset(df, bin_factor, bin_size, smoothing_length, all_units=None):
+def build_continuous_dataset(df, bin_factor, bin_size, smoothing_length):
     all_spike_list, all_emg_list = [], []
     for idx, row in df.iterrows():
         spike_df = row["spike_counts"]
@@ -121,11 +112,6 @@ def build_continuous_dataset(df, bin_factor, bin_size, smoothing_length, all_uni
             continue
         if emg_val is None:
             continue
-
-        # Harmonize spike_df to have all units (missing units get 0)
-        if all_units is not None:
-            spike_df = spike_df.reindex(columns=all_units, fill_value=0)
-
         ds_spike_df, ds_emg = downsample_spike_and_emg(spike_df, emg_val, bin_factor)
         if ds_spike_df.shape[0] == 0:
             continue
@@ -141,9 +127,7 @@ def build_continuous_dataset(df, bin_factor, bin_size, smoothing_length, all_uni
         all_emg_list.append(np.abs(e_arr))
     if len(all_spike_list) == 0:
         return np.empty((0,)), np.empty((0,))
-
     return np.concatenate(all_spike_list, axis=0), np.concatenate(all_emg_list, axis=0)
-
 
 def create_rnn_dataset_continuous(X_arr, Y_arr, seq_len):
     if X_arr.shape[0] <= seq_len:
@@ -266,12 +250,12 @@ def compute_multichannel_vaf(y_true, y_pred):
         vafs.append(vaf_ch)
     return np.array(vafs)
 
-def train_model(model, X_train, Y_train, num_epochs=200, lr=0.001):
+def train_model(model, X_train, Y_train):
     ds = TensorDataset(torch.tensor(X_train), torch.tensor(Y_train))
     dl = DataLoader(ds, batch_size=BATCH_SIZE, shuffle=True)
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     criterion = nn.MSELoss()
-    for ep in range(1, num_epochs+1):
+    for ep in range(1, NUM_EPOCHS+1):
         model.train()
         for Xb, Yb in dl:
             Xb, Yb = Xb.to(DEVICE), Yb.to(DEVICE)
@@ -281,7 +265,6 @@ def train_model(model, X_train, Y_train, num_epochs=200, lr=0.001):
             loss.backward()
             optimizer.step()
     return model
-
 
 def evaluate_model(model, X, Y):
     model.eval()
@@ -303,27 +286,11 @@ def evaluate_model(model, X, Y):
 ###############################################################################
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--decoder', type=str, required=True, choices=list(ARCH_HYPERPARAMS.keys()))
-    parser.add_argument('--dimred', type=str, default="PCA", choices=["PCA", "UMAP"])
-    parser.add_argument('--crossval_runs', type=int, default=10)
-    parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--save_dir', type=str, default=".")
-    parser.add_argument('--train_frac', type=float, default=0.75)
-    parser.add_argument('--combined_pickle', type=str, default="combined.pkl")
-    args = parser.parse_args()
+    set_seed(SEED)
+    print(f"[INFO] Using device: {DEVICE}")
 
-    set_seed(args.seed)
-    
-    # Charge les hyperparams
-    hp = ARCH_HYPERPARAMS[args.decoder]
-    N_PCA, K_LAG, HIDDEN, NUM_EPOCHS, LR = (
-        hp["N_PCA"], hp["K_LAG"], hp["HIDDEN"], hp["NUM_EPOCHS"], hp["LR"]
-    )
-
-    # Charge les données
-    combined_df = pd.read_pickle(args.combined_pickle)
-    ALL_UNITS = get_all_unit_names(combined_df)
+    print(f"[INFO] Loading combined DataFrame from '{COMBINED_PICKLE_FILE}' ...")
+    combined_df = pd.read_pickle(COMBINED_PICKLE_FILE)
     if not np.issubdtype(combined_df["date"].dtype, np.datetime64):
         combined_df["date"] = pd.to_datetime(combined_df["date"])
 
@@ -333,10 +300,9 @@ def main():
         return
 
     day0 = unique_days[0]
-    train_df = combined_df[combined_df["date"] == day0].reset_index(drop=True)
     test_days = [d for d in unique_days]
 
-    # Detect nb EMG channels
+    # Detect how many EMG channels
     n_emg_channels = 0
     for _, row in combined_df.iterrows():
         emg_val = row.get("EMG", None)
@@ -351,116 +317,142 @@ def main():
         print("[ERROR] Could not detect EMG channels from DataFrame.")
         return
 
-    # Build day0 (train) full latent and target arrays
-    BIN_FACTOR = 20  # ou adapte par argparse si besoin
-    BIN_SIZE = 0.001
-    SMOOTHING_LENGTH = 0.05
-    SAMPLING_RATE = 1000
+    train_df = combined_df[combined_df["date"] == day0].reset_index(drop=True)
+    max_dim = max(GRU_N_PCA, LSTM_N_PCA, LINEAR_N_PCA, LIGRU_N_PCA)
 
-    # build_continuous_dataset doit être défini dans ton script, cf. version plus haut
-    day0_spike, day0_emg = build_continuous_dataset(train_df, BIN_FACTOR, BIN_SIZE, SMOOTHING_LENGTH, all_units=ALL_UNITS)
-    max_dim = N_PCA
-    dimred_model_day0 = get_dimred_model(day0_spike, args.dimred, max_dim, args.seed)
-    z0 = transform_dimred(dimred_model_day0, day0_spike, args.dimred)
-
-    # Selon le décodeur, build les datasets
-    if args.decoder == "Linear":
-        X_full, Y_full = create_linear_dataset_continuous(z0[:, :N_PCA], day0_emg, K_LAG)
-    else:
-        X_full, Y_full = create_rnn_dataset_continuous(z0[:, :N_PCA], day0_emg, K_LAG)
-
-    # Cross-validation sur day0 (interne)
     results = []
-    for fold in range(args.crossval_runs):
-        rng = np.random.default_rng(args.seed + fold)
-        idx = np.arange(len(X_full))
-        rng.shuffle(idx)
-        split = int(args.train_frac * len(idx))
-        tr_idx, te_idx = idx[:split], idx[split:]
 
-        X_tr, Y_tr = X_full[tr_idx], Y_full[tr_idx]
-        X_te, Y_te = X_full[te_idx], Y_full[te_idx]
+    # ----> AJOUT CROSS-VALIDATION <----
+    # 1. Crée tout le dataset day0
+    day0_spike, day0_emg = build_continuous_dataset(train_df, BIN_FACTOR, BIN_SIZE, SMOOTHING_LENGTH)
+    n_samples = day0_spike.shape[0]
+    rng = np.random.default_rng(SEED)
+    indices = rng.permutation(n_samples)
+    folds = np.array_split(indices, N_FOLDS)
 
-        # --- modèle ---
-        if args.decoder == "GRU":
-            model = GRUDecoder(N_PCA, HIDDEN, n_emg_channels).to(DEVICE)
-        elif args.decoder == "LSTM":
-            model = LSTMDecoder(N_PCA, HIDDEN, n_emg_channels).to(DEVICE)
-        elif args.decoder == "Linear":
-            model = LinearLagDecoder(K_LAG * N_PCA, HIDDEN, n_emg_channels).to(DEVICE)
-        elif args.decoder == "LiGRU":
-            model = LiGRUDecoder(N_PCA, HIDDEN, n_emg_channels).to(DEVICE)
+    for cv_fold in range(N_FOLDS):
+        # Indexes pour split train/val sur day0
+        val_idx = folds[cv_fold]
+        tr_idx = np.hstack([folds[j] for j in range(N_FOLDS) if j != cv_fold])
+        spike_tr, emg_tr = day0_spike[tr_idx], day0_emg[tr_idx]
+        spike_val, emg_val = day0_spike[val_idx], day0_emg[val_idx]
 
-        # Adapte train_model pour prendre en compte NUM_EPOCHS et LR en argument
-        train_model(model, X_tr, Y_tr, num_epochs=NUM_EPOCHS, lr=LR)
-        vaf_te, vaf_ch_te = evaluate_model(model, X_te, Y_te)
-        # Save CV (day0) performance
-        for ch_idx, vaf_single in enumerate(vaf_ch_te):
-            results.append({
-                "day": day0,
-                "day_int": 0,
-                "align": "crossval",
-                "decoder": args.decoder,
-                "dim_red": args.dimred,
-                "fold": fold,
-                "emg_channel": ch_idx,
-                "vaf": vaf_single
-            })
+        for dim_red_method in ["PCA", "UMAP"]:
+            # Fit reduction sur TRAIN day0 de ce fold
+            dimred_model_day0 = get_dimred_model(spike_tr, dim_red_method, max_dim, SEED + cv_fold)
+            z0_tr = transform_dimred(dimred_model_day0, spike_tr, dim_red_method)
+            z0_val = transform_dimred(dimred_model_day0, spike_val, dim_red_method)
 
-        # Test cross-days (out-of-sample)
-        for day_i, d_val in enumerate(test_days):
-            if d_val == day0:
-                continue
-            day_df = combined_df[combined_df["date"] == d_val].reset_index(drop=True)
-            spike, emg = build_continuous_dataset(day_df, BIN_FACTOR, BIN_SIZE, SMOOTHING_LENGTH, all_units=ALL_UNITS)
-            if spike.shape[0] == 0: continue
+            # Séquences pour chaque décodeur (train sur train day0)
+            all_sequences_tr = {
+                "GRU":   create_rnn_dataset_continuous(z0_tr[:, :GRU_N_PCA],   emg_tr,   GRU_K_LAG),
+                "LSTM":  create_rnn_dataset_continuous(z0_tr[:, :LSTM_N_PCA],  emg_tr,   LSTM_K_LAG),
+                "Linear":create_linear_dataset_continuous(z0_tr[:, :LINEAR_N_PCA], emg_tr, LINEAR_K_LAG),
+                "LiGRU": create_rnn_dataset_continuous(z0_tr[:, :LIGRU_N_PCA], emg_tr,   LIGRU_K_LAG),
+            }
+            models = {}
+            for decoder, (X_train, Y_train) in all_sequences_tr.items():
+                if X_train.shape[0] == 0:
+                    continue
+                if decoder == "GRU":
+                    model = train_model(GRUDecoder(GRU_N_PCA, GRU_HIDDEN_DIM, n_emg_channels).to(DEVICE), X_train, Y_train)
+                elif decoder == "LSTM":
+                    model = train_model(LSTMDecoder(LSTM_N_PCA, LSTM_HIDDEN_DIM, n_emg_channels).to(DEVICE), X_train, Y_train)
+                elif decoder == "Linear":
+                    model = train_model(LinearLagDecoder(LINEAR_K_LAG*LINEAR_N_PCA, LINEAR_HIDDEN_DIM, n_emg_channels).to(DEVICE), X_train, Y_train)
+                elif decoder == "LiGRU":
+                    model = train_model(LiGRUDecoder(LIGRU_N_PCA, LIGRU_HIDDEN_DIM, n_emg_channels).to(DEVICE), X_train, Y_train)
+                models[decoder] = model
 
-            # Direct : projette sur modèle day0
-            zx_direct = transform_dimred(dimred_model_day0, spike, args.dimred)
-            # Aligné : fit modèle sur dayX et réaligne (PCA seulement)
-            dimred_model_dayX = get_dimred_model(spike, args.dimred, N_PCA, args.seed)
-            zx_dayX = transform_dimred(dimred_model_dayX, spike, args.dimred)
+            # Test sur chaque jour (direct & aligned)
+            for day_i, d_val in enumerate(test_days):
+                day_df = combined_df[combined_df["date"] == d_val].reset_index(drop=True)
+                spike, emg = build_continuous_dataset(day_df, BIN_FACTOR, BIN_SIZE, SMOOTHING_LENGTH)
+                if spike.shape[0] == 0:
+                    continue
+                # Projette avec le modèle day0 du fold (direct)
+                zx_direct = transform_dimred(dimred_model_day0, spike, dim_red_method)
+                # Projette avec modèle du jourX (pour alignement)
+                dimred_model_dayX = get_dimred_model(spike, dim_red_method, max_dim, SEED + cv_fold)
+                zx_dayX = transform_dimred(dimred_model_dayX, spike, dim_red_method)
 
-            for align_mode in ["direct", "aligned"]:
-                if align_mode == "direct":
-                    zx_test = zx_direct[:, :N_PCA]
-                else:
-                    if args.dimred == "PCA":
-                        V_day0 = dimred_model_day0.components_[:N_PCA, :].T
-                        V_dayX = dimred_model_dayX.components_[:N_PCA, :].T
-                        try:
-                            R = pinv(V_dayX) @ V_day0
-                            zx_test = zx_dayX[:, :N_PCA] @ R
-                        except Exception:
-                            zx_test = zx_dayX[:, :N_PCA]
+                for decoder, n_dim, seq_len in [
+                    ("GRU", GRU_N_PCA, GRU_K_LAG),
+                    ("LSTM", LSTM_N_PCA, LSTM_K_LAG),
+                    ("Linear", LINEAR_N_PCA, LINEAR_K_LAG),
+                    ("LiGRU", LIGRU_N_PCA, LIGRU_K_LAG),
+                ]:
+                    # --- 1. Direct (pas d'alignement)
+                    if decoder == "Linear":
+                        X_seq, Y_seq = create_linear_dataset_continuous(zx_direct[:, :n_dim], emg, seq_len)
                     else:
-                        zx_test = zx_dayX[:, :N_PCA]
+                        X_seq, Y_seq = create_rnn_dataset_continuous(zx_direct[:, :n_dim], emg, seq_len)
+                    if X_seq.shape[0] == 0: continue
+                    vaf, vaf_ch = evaluate_model(models[decoder], X_seq, Y_seq)
+                    for ch_idx, vaf_single in enumerate(vaf_ch):
+                        results.append({
+                            "cv": cv_fold,
+                            "day": d_val,
+                            "day_int": (d_val - day0).days,
+                            "align": "direct",
+                            "decoder": decoder,
+                            "dim_red": dim_red_method,
+                            "emg_channel": ch_idx,
+                            "vaf": vaf_single
+                        })
 
-                if args.decoder == "Linear":
-                    X_seq, Y_seq = create_linear_dataset_continuous(zx_test, emg, K_LAG)
-                else:
-                    X_seq, Y_seq = create_rnn_dataset_continuous(zx_test, emg, K_LAG)
-                if X_seq.shape[0] == 0: continue
+                    # --- 2. Aligned (linéaire PCA, baseline UMAP)
+                    if dim_red_method == "PCA":
+                        V_day0_k = dimred_model_day0.components_[:n_dim, :].T
+                        V_dayX_k = dimred_model_dayX.components_[:n_dim, :].T
+                        try:
+                            R = pinv(V_dayX_k) @ V_day0_k
+                            zx_aligned = (zx_dayX[:, :n_dim]) @ R
+                        except Exception as e:
+                            zx_aligned = zx_dayX[:, :n_dim]
+                    elif dim_red_method == "UMAP":
+                        zx_aligned = zx_dayX[:, :n_dim]
+                    # Build seqs alignés
+                    if decoder == "Linear":
+                        X_seq, Y_seq = create_linear_dataset_continuous(zx_aligned, emg, seq_len)
+                    else:
+                        X_seq, Y_seq = create_rnn_dataset_continuous(zx_aligned, emg, seq_len)
+                    if X_seq.shape[0] == 0: continue
+                    vaf, vaf_ch = evaluate_model(models[decoder], X_seq, Y_seq)
+                    for ch_idx, vaf_single in enumerate(vaf_ch):
+                        results.append({
+                            "cv": cv_fold,
+                            "day": d_val,
+                            "day_int": (d_val - day0).days,
+                            "align": "aligned",
+                            "decoder": decoder,
+                            "dim_red": dim_red_method,
+                            "emg_channel": ch_idx,
+                            "vaf": vaf_single
+                        })
+                print(f" [fold={cv_fold+1:02d}] {dim_red_method:4} | day={str(d_val.date())} | done")
 
-                vaf, vaf_ch = evaluate_model(model, X_seq, Y_seq)
-                for ch_idx, vaf_single in enumerate(vaf_ch):
-                    results.append({
-                        "day": d_val,
-                        "day_int": (d_val - day0).days,
-                        "align": align_mode,
-                        "decoder": args.decoder,
-                        "dim_red": args.dimred,
-                        "fold": fold,
-                        "emg_channel": ch_idx,
-                        "vaf": vaf_single,
-                        "mean_vaf": vaf
-                    })
-            print(f"[fold={fold}] {str(d_val.date())} done.")
+    # Final DataFrame
+    df_results = pd.DataFrame(results)
+    pd.to_pickle(df_results, SAVE_RESULTS_PKL)
+    print(f"\n[INFO] Saved all results to {SAVE_RESULTS_PKL}")
 
-    # Sauvegarde finale
-    save_path = os.path.join(args.save_dir, f"crossday_results_{args.decoder}_{args.dimred}.pkl")
-    pd.to_pickle(pd.DataFrame(results), save_path)
-    print(f"\n[INFO] Saved all results to {save_path}")
+    # Plot (exemple)
+    for dim_red in ["PCA", "UMAP"]:
+        for align_type in ["direct", "aligned"]:
+            plt.figure(figsize=(10,6))
+            for dec in ["GRU","LSTM","Linear","LiGRU"]:
+                sub = df_results[(df_results['decoder']==dec)&(df_results['dim_red']==dim_red)&(df_results['align']==align_type)]
+                means = sub.groupby("day_int")["vaf"].mean()
+                stds = sub.groupby("day_int")["vaf"].std()
+                plt.errorbar(means.index, means.values, yerr=stds.values, label=f"{dec} ({align_type})")
+            plt.legend()
+            plt.xlabel("Days from day0")
+            plt.ylabel("Mean VAF")
+            plt.title(f"VAF {align_type} / {dim_red}")
+            plt.grid(True)
+            plt.tight_layout()
+            plt.show()
 
 if __name__ == "__main__":
     main()

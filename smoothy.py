@@ -51,21 +51,23 @@ def main():
 
     # ── FIGURE 1 – brute 1000 Hz ───────────────────────────
     plt.figure(figsize=(9, 3))
-    plt.plot(t_raw, rect_raw, label="Rectifiée brute (1000 Hz)", alpha=0.4)
-    plt.plot(t_raw, filt_raw, label="Filtrée 5 Hz (1000 Hz)", lw=2)
+    plt.plot(t_raw, rect_raw, label="Rectifiée brute", alpha=0.4)
+    plt.plot(t_raw, filt_raw, label="Filtrée 5 Hz", lw=2)
     plt.xlim(0, SECONDS_TO_PLOT)
     plt.xlabel("Temps (s)"); plt.ylabel("Amplitude (a.u.)")
-    plt.title("EMG rectifié : brut vs. passe‑bas 5 Hz")
+    plt.ylim(-0.5, 10)
+    # plt.title("EMG rectifié : brut vs. passe‑bas 5 Hz")
+    
     plt.legend(); plt.tight_layout()
-
+    plt.savefig("emg_rectif.png", dpi=700)
     # ── FIGURE 2 – comparatif 50 Hz ────────────────────────
     plt.figure(figsize=(9, 3))
-    plt.plot(t_ds, rect_ds,      label="Rectifiée brute (50 Hz)", alpha=0.4)
+    plt.plot(t_ds, rect_ds,      label="Rectifiée brute ", alpha=0.4)
     plt.plot(t_ds, filt_raw_ds,  label="Filtre→DS", lw=2)
     plt.plot(t_ds, rect_ds_flt,  label="DS→filtre", lw=1.5, ls="--")
     plt.xlim(0, SECONDS_TO_PLOT)
     plt.xlabel("Temps (s)"); plt.ylabel("Amplitude (a.u.)")
-    plt.title("Comparatif après down‑sampling (50 Hz)")
+    # plt.title("Comparatif après down‑sampling (50 Hz)")
     plt.legend(); plt.tight_layout()
 
     # ── FIGURE 3 – PSD (log‑scale) ─────────────────────────
@@ -79,9 +81,9 @@ def main():
     plt.semilogy(freqs, P_fds,   label="DS→filtre")
     plt.xlim(0, 25); plt.xlabel("Fréquence (Hz)")
     plt.ylabel("PSD (a.u./Hz)")
-    plt.title("Densité spectrale de puissance")
+    # plt.title("Densité spectrale de puissance")
     plt.legend(); plt.tight_layout()
-
+    plt.savefig("emg_spect.png", dpi=700)
     plt.show()
 
 # ────────────────────────────────────────────────────────────
