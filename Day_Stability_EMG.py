@@ -37,14 +37,14 @@ POST_TRIAL = 4.0
 SAMPLING_RATE = 1000    # Samples per second
 
 # PCA dims per decoder
-GRU_N_PCA    = 14
+GRU_N_PCA    = 32
 LSTM_N_PCA   = 14
 LINEAR_N_PCA = 18
 LIGRU_N_PCA  = 14
 
 # RNN/Linear hidden dims & lag
-GRU_HIDDEN_DIM    = 12
-GRU_K_LAG         = 16  # Number of timesteps in the input sequence for GRU
+GRU_HIDDEN_DIM    = 96
+GRU_K_LAG         = 25  # Number of timesteps in the input sequence for GRU
 
 LSTM_HIDDEN_DIM   = 1
 LSTM_K_LAG        = 1  # Number of timesteps in the input sequence for LSTM
