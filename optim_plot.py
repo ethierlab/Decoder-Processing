@@ -5,7 +5,7 @@ import pandas as pd
 import pickle
 
 # ========= PARAMS =========
-PKL_PATH = "ALL_gridsearch_results_early.pkl"
+PKL_PATH = "ALL_gridsearch_results_1.pkl"
 DECODER_ORDER = ['ligru', 'lstm', 'gru', 'linear']   # printing order only
 TOPN = 50                                            # for boxplot selection
 TARGETS = [0.80, 0.90, 0.95]                         # vertical goal lines on median curve
@@ -48,6 +48,20 @@ df["num_params"] = pd.to_numeric(df["num_params"], errors="coerce")
 # valid runs
 df = df.dropna(subset=["decoder", "mean_vaf", "num_params"])
 df = df[df["num_params"] > 0]
+
+# ------------- HARDEN VAFS -------------
+# Cast to numeric again just in case
+df["mean_vaf"] = pd.to_numeric(df["mean_vaf"], errors="coerce")
+
+# Normalize percent-style VAFs (e.g., 87, 99) down to 0–1.
+mask_pct = (df["mean_vaf"] > 1.5) & (df["mean_vaf"] <= 1000)
+df.loc[mask_pct, "mean_vaf"] = df.loc[mask_pct, "mean_vaf"] / 100.0
+
+# Remove non-finite and out-of-range values
+df = df[np.isfinite(df["mean_vaf"])]
+df = df[df["mean_vaf"].between(-1.0, 1.0)]
+
+
 
 # ===== Choose config keys that exist (no channel needed) =====
 CAND_CONFIG_KEYS = [
@@ -151,7 +165,7 @@ ax.set_ylabel("mean VAF (avg across all muscles)")
 ax.set_ylim(0, 1.2)
 reorder_and_relabel_legend(ax, title='Decoder')  # NEW
 plt.tight_layout()
-plt.savefig("scatter_vaf_vs_params_avg_all_muscles.png", dpi=350)
+plt.savefig("optim_scatter_vaf_vs_params_avg_all_muscles.png", dpi=350)
 plt.show()
 
 # ========= VIOLIN (folds avg across all muscles) =========
@@ -161,6 +175,8 @@ if not flat_avg.empty:
     ax = sns.violinplot(
         data=flat_avg, x="decoder", y="vaf_avg_all_muscles",
         order=order_present,                      # NEW
+        cut=0,
+        bw_adjust=0.5,
         palette={k: COLOR_MAP[k] for k in order_present},  # NEW
         inner="point"
     )
@@ -170,7 +186,7 @@ if not flat_avg.empty:
     ax.set_xlabel("Decoder")
     # No legend for this plot (x already encodes decoder)
     plt.tight_layout()
-    plt.savefig("violin_vaf_folds_by_decoder_avg_all_muscles.png", dpi=300)
+    plt.savefig("optim_violin_vaf_folds_by_decoder_avg_all_muscles.png", dpi=300)
     plt.show()
 else:
     print("[VIOLIN] Skipped (no fold_vafs present).")
@@ -234,7 +250,7 @@ if not flat_avg.empty:
                [LEGEND_LABELS[d] for d in present],
                title='Decoder', bbox_to_anchor=(1.02, 1), loc='upper left')
     plt.tight_layout()
-    plt.savefig('curve_numparams_vs_median_vaf_inverted_axes.png', dpi=350)
+    plt.savefig('optim_curve_numparams_vs_median_vaf_inverted_axes.png', dpi=350)
     plt.show()
 
     # Console summary: minimum params to reach targets
