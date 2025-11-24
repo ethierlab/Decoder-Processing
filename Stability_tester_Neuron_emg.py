@@ -338,7 +338,7 @@ def train_model(model, X_train, Y_train, num_epochs=200, lr=0.001,
             xb = xb.to(DEVICE, non_blocking=True)
             yb = yb.to(DEVICE, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
+            with torch.amp.autocast("cuda", enabled=scaler.is_enabled()):
                 pred = model(xb)
                 loss = criterion(pred, yb)
             scaler.scale(loss).backward()
@@ -355,7 +355,7 @@ def evaluate_model(model, X, Y, batch_size=256, use_amp=True):
     with torch.no_grad():
         for i in range(0, len(X), batch_size):
             bx = torch.as_tensor(X[i:i+batch_size], dtype=torch.float32).to(DEVICE, non_blocking=True)
-            with torch.cuda.amp.autocast(enabled=(use_amp and torch.cuda.is_available())):
+            with torch.amp.autocast("cuda", enabled=(use_amp and torch.cuda.is_available())):
                 out = model(bx)
             preds.append(out.cpu().numpy())
     if preds:

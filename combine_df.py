@@ -30,6 +30,6 @@ if __name__ == '__main__':
     # Specify the directory where your individual pickles are stored.
     input_directory = "C:/Users/Ethier Lab/Documents/GitHub/Decoder-Processing/DataSET/Jango_ISO_2015"
     # Specify the path for the combined pickle file.
-    output_pickle = input_directory + "/combined.pkl"
+    output_pickle = input_directory + "/combined_1.pkl"
     
     combined_df = combine_pickles(input_directory, output_pickle)
