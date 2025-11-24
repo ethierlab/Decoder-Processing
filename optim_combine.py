@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 import calendar
 
-result_dir = Path('C:/Users/Vincent/Documents/HPC/')  # dossier des .pkl
+result_dir = Path('C:/Users/Vincent/Downloads/train/optim/')  # dossier des .pkl
 
 # ---- pick your month(s) to EXCLUDE here ----
 exclude_months_input = ['08']   # accepts: 8, '08', 'Aug', 'August', 'août', 'aout', etc.
@@ -69,5 +69,5 @@ if skipped_pkls:
 
 print(f"Fusion terminée! {len(all_results)} runs.")
 
-with open('ALL_gridsearch_results.pkl', 'wb') as f:
+with open('ALL_gridsearch_results_1.pkl', 'wb') as f:
     pickle.dump(all_results, f)
